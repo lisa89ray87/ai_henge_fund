@@ -31,7 +31,7 @@ dependencies = [
 
     # Database
     "sqlalchemy>=2.0.43",
-    "psycopg2-binary>=2.9.10",
+    "psycopg[binary]>=3.2.0",
     "alembic>=1.16.0",
 
     # Data
@@ -48,6 +48,7 @@ dependencies = [
 
     # Validation
     "pydantic>=2.11.0",
+    "pydantic-settings>=2.0.0",
 
     # Logging
     "loguru>=0.7.3",

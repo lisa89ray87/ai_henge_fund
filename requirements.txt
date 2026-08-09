@@ -1,2 +1,3 @@
-python-dotenv>=1.0.0
-requests>=2.31.0
+# Runtime dependencies are defined canonically in pyproject.toml.
+# Install this file with pip to install the project and its runtime dependencies.
+-e .
