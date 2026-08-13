@@ -3,7 +3,6 @@
 from decimal import Decimal
 
 from ai_henge_fund.database.integrations.daily_stock_analyse import (
-    DAILY_STOCK_ANALYSE_SOURCE,
     _action,
     _confidence_value,
     _reasoning,
@@ -34,7 +33,7 @@ def test_daily_signal_reasoning_preserves_catalyst_and_regime_context() -> None:
         "run_id": "run-1",
     }
     reasoning = _reasoning(row)
-    assert DAILY_STOCK_ANALYSE_SOURCE not in reasoning
+    assert "daily_stock_analyse" not in reasoning
     assert "market_regime=RISK_OFF" in reasoning
     assert "catalyst=Example catalyst" in reasoning
     assert "run_id=run-1" in reasoning
