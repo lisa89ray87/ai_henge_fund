@@ -66,8 +66,8 @@ def _action(direction: str) -> SignalAction:
 
 
 def _reasoning(row: dict[str, Any]) -> str:
+    """Build human-readable reasoning while keeping source provenance separate."""
     parts = [
-        "Imported from daily_stock_analyse",
         f"status={row.get('status') or 'UNKNOWN'}",
         f"market_regime={row.get('market_regime_label') or 'UNKNOWN'}",
     ]
