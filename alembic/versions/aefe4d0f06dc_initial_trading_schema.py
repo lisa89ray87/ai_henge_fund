@@ -12,7 +12,6 @@ import sqlalchemy as sa
 
 from alembic import op
 
-# revision identifiers, used by Alembic.
 revision: str = "aefe4d0f06dc"
 down_revision: str | Sequence[str] | None = None
 branch_labels: str | Sequence[str] | None = None
@@ -65,52 +64,25 @@ def upgrade() -> None:
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("portfolio_id", sa.Uuid(), nullable=False),
         sa.Column("symbol", sa.String(length=32), nullable=False),
-        sa.Column(
-            "side",
-            sa.Enum("BUY", "SELL", name="order_side", native_enum=False, create_constraint=True),
-            nullable=False,
-        ),
-        sa.Column(
-            "order_type",
-            sa.Enum(
-                "MARKET",
-                "LIMIT",
-                "STOP",
-                "STOP_LIMIT",
-                name="order_type",
-                native_enum=False,
-                create_constraint=True,
-            ),
-            nullable=False,
-        ),
+        sa.Column("side", sa.Enum("BUY", "SELL", name="order_side", native_enum=False, create_constraint=True), nullable=False),
+        sa.Column("order_type", sa.Enum("MARKET", "LIMIT", "STOP", "STOP_LIMIT", name="order_type", native_enum=False, create_constraint=True), nullable=False),
         sa.Column("quantity", sa.Numeric(precision=20, scale=8), nullable=False),
         sa.Column("limit_price", sa.Numeric(precision=20, scale=8), nullable=True),
         sa.Column("stop_price", sa.Numeric(precision=20, scale=8), nullable=True),
-        sa.Column(
-            "status",
-            sa.Enum(
-                "NEW",
-                "PENDING",
-                "PARTIALLY_FILLED",
-                "FILLED",
-                "CANCELLED",
-                "REJECTED",
-                name="order_status",
-                native_enum=False,
-                create_constraint=True,
-            ),
-            nullable=False,
-        ),
+        sa.Column("status", sa.Enum("NEW", "PENDING", "PARTIALLY_FILLED", "FILLED", "CANCELLED", "REJECTED", name="order_status", native_enum=False, create_constraint=True), nullable=False),
         sa.Column("broker_order_id", sa.String(length=255), nullable=True),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["portfolio_id"], ["portfolios.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_orders_created_at", "orders", ["created_at"], unique=False)
-    op.create_index("ix_orders_portfolio_id", "orders", ["portfolio_id"], unique=False)
-    op.create_index("ix_orders_status", "orders", ["status"], unique=False)
-    op.create_index("ix_orders_symbol", "orders", ["symbol"], unique=False)
+    for name, column in (
+        ("ix_orders_created_at", "created_at"),
+        ("ix_orders_portfolio_id", "portfolio_id"),
+        ("ix_orders_status", "status"),
+        ("ix_orders_symbol", "symbol"),
+    ):
+        op.create_index(name, "orders", [column], unique=False)
     op.create_table(
         "executions",
         sa.Column("id", sa.Uuid(), nullable=False),
@@ -126,50 +98,36 @@ def upgrade() -> None:
     )
     op.create_index("ix_executions_order_id", "executions", ["order_id"], unique=False)
     op.create_table(
-        "signals",
+        "ai_signals",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("strategy_id", sa.Uuid(), nullable=False),
         sa.Column("symbol", sa.String(length=32), nullable=False),
-        sa.Column(
-            "action",
-            sa.Enum(
-                "BUY",
-                "SELL",
-                "HOLD",
-                name="signal_action",
-                native_enum=False,
-                create_constraint=True,
-            ),
-            nullable=False,
-        ),
+        sa.Column("action", sa.Enum("BUY", "SELL", "HOLD", name="signal_action", native_enum=False, create_constraint=True), nullable=False),
         sa.Column("confidence", sa.Numeric(precision=20, scale=8), nullable=True),
         sa.Column("target_price", sa.Numeric(precision=20, scale=8), nullable=True),
         sa.Column("reasoning", sa.Text(), nullable=True),
+        sa.Column("source", sa.String(length=64), nullable=False),
+        sa.Column("source_signal_id", sa.String(length=128), nullable=True),
         sa.Column("generated_at", sa.DateTime(timezone=True), nullable=False),
         sa.ForeignKeyConstraint(["strategy_id"], ["strategies.id"]),
         sa.PrimaryKeyConstraint("id"),
+        sa.UniqueConstraint("source", "source_signal_id", name="uq_ai_signals_source_signal"),
     )
-    op.create_index("ix_signals_generated_at", "signals", ["generated_at"], unique=False)
-    op.create_index("ix_signals_strategy_id", "signals", ["strategy_id"], unique=False)
-    op.create_index("ix_signals_symbol", "signals", ["symbol"], unique=False)
+    for name, column in (
+        ("ix_ai_signals_generated_at", "generated_at"),
+        ("ix_ai_signals_source", "source"),
+        ("ix_ai_signals_source_signal_id", "source_signal_id"),
+        ("ix_ai_signals_strategy_id", "strategy_id"),
+        ("ix_ai_signals_symbol", "symbol"),
+    ):
+        op.create_index(name, "ai_signals", [column], unique=False)
     op.create_table(
         "agent_runs",
         sa.Column("id", sa.Uuid(), nullable=False),
         sa.Column("strategy_id", sa.Uuid(), nullable=True),
         sa.Column("agent_name", sa.String(length=255), nullable=False),
         sa.Column("symbol", sa.String(length=32), nullable=True),
-        sa.Column(
-            "status",
-            sa.Enum(
-                "RUNNING",
-                "COMPLETED",
-                "FAILED",
-                name="agent_run_status",
-                native_enum=False,
-                create_constraint=True,
-            ),
-            nullable=False,
-        ),
+        sa.Column("status", sa.Enum("RUNNING", "COMPLETED", "FAILED", name="agent_run_status", native_enum=False, create_constraint=True), nullable=False),
         sa.Column("started_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("completed_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("input_summary", sa.Text(), nullable=True),
@@ -178,31 +136,28 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["strategy_id"], ["strategies.id"]),
         sa.PrimaryKeyConstraint("id"),
     )
-    op.create_index("ix_agent_runs_agent_name", "agent_runs", ["agent_name"], unique=False)
-    op.create_index("ix_agent_runs_started_at", "agent_runs", ["started_at"], unique=False)
-    op.create_index("ix_agent_runs_status", "agent_runs", ["status"], unique=False)
-    op.create_index("ix_agent_runs_strategy_id", "agent_runs", ["strategy_id"], unique=False)
-    op.create_index("ix_agent_runs_symbol", "agent_runs", ["symbol"], unique=False)
+    for name, column in (
+        ("ix_agent_runs_agent_name", "agent_name"),
+        ("ix_agent_runs_started_at", "started_at"),
+        ("ix_agent_runs_status", "status"),
+        ("ix_agent_runs_strategy_id", "strategy_id"),
+        ("ix_agent_runs_symbol", "symbol"),
+    ):
+        op.create_index(name, "agent_runs", [column], unique=False)
 
 
 def downgrade() -> None:
     """Revert this revision."""
-    op.drop_index("ix_agent_runs_symbol", table_name="agent_runs")
-    op.drop_index("ix_agent_runs_strategy_id", table_name="agent_runs")
-    op.drop_index("ix_agent_runs_status", table_name="agent_runs")
-    op.drop_index("ix_agent_runs_started_at", table_name="agent_runs")
-    op.drop_index("ix_agent_runs_agent_name", table_name="agent_runs")
+    for name in ("ix_agent_runs_symbol", "ix_agent_runs_strategy_id", "ix_agent_runs_status", "ix_agent_runs_started_at", "ix_agent_runs_agent_name"):
+        op.drop_index(name, table_name="agent_runs")
     op.drop_table("agent_runs")
-    op.drop_index("ix_signals_symbol", table_name="signals")
-    op.drop_index("ix_signals_strategy_id", table_name="signals")
-    op.drop_index("ix_signals_generated_at", table_name="signals")
-    op.drop_table("signals")
+    for name in ("ix_ai_signals_symbol", "ix_ai_signals_strategy_id", "ix_ai_signals_source_signal_id", "ix_ai_signals_source", "ix_ai_signals_generated_at"):
+        op.drop_index(name, table_name="ai_signals")
+    op.drop_table("ai_signals")
     op.drop_index("ix_executions_order_id", table_name="executions")
     op.drop_table("executions")
-    op.drop_index("ix_orders_symbol", table_name="orders")
-    op.drop_index("ix_orders_status", table_name="orders")
-    op.drop_index("ix_orders_portfolio_id", table_name="orders")
-    op.drop_index("ix_orders_created_at", table_name="orders")
+    for name in ("ix_orders_symbol", "ix_orders_status", "ix_orders_portfolio_id", "ix_orders_created_at"):
+        op.drop_index(name, table_name="orders")
     op.drop_table("orders")
     op.drop_index("ix_positions_portfolio_id", table_name="positions")
     op.drop_table("positions")

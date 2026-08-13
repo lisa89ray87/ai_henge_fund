@@ -1,19 +1,19 @@
 # AI Henge Fund
 
-This repository contains a minimal Python project scaffold for the AI Henge Fund work.
+Production-style AI trading research and portfolio infrastructure.
 
-## Setup
+## Current architecture
 
-1. Create and activate a virtual environment.
-2. Install dependencies:
-   ```bash
-   pip install -r requirements.txt
-   ```
-3. Copy the environment example file:
-   ```bash
-   copy .env.example .env
-   ```
+AI Henge Fund deliberately reuses the existing `daily_stock_analyse` engine rather than rebuilding its proven live-alert, catalyst/news, market-regime, scoring, reporting, and signal-lifecycle components.
 
-## Development
+See [`docs/INTEGRATION_ARCHITECTURE.md`](docs/INTEGRATION_ARCHITECTURE.md) for the integration boundary.
 
-- Use `python -m pip install -e .[dev]` for editable install with development tools.
+### Components
+
+- **daily_stock_analyse** — existing deterministic market/news/catalyst/live-alert engine
+- **TradingAgents** — planned higher-level multi-agent research and reasoning layer
+- **Moomoo MCP** — planned market-data and broker adapter; read-only/simulated first
+- **Neon PostgreSQL** — shared persistence layer with separate table ownership
+- **AI Henge Fund** — portfolio, risk, normalized signals, orders, executions, and orchestration
+
+No live trading is enabled by this repository at the current stage.

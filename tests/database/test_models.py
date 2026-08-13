@@ -27,11 +27,11 @@ from ai_henge_fund.database.models import (
 def test_base_metadata_contains_all_initial_schema_tables() -> None:
     assert set(Base.metadata.tables) == {
         "agent_runs",
+        "ai_signals",
         "executions",
         "orders",
         "portfolios",
         "positions",
-        "signals",
         "strategies",
     }
 
@@ -39,7 +39,6 @@ def test_base_metadata_contains_all_initial_schema_tables() -> None:
 def test_uuid_primary_keys_use_python_uuid4_defaults() -> None:
     for model in (Portfolio, Position, Order, Execution, Strategy, Signal, AgentRun):
         identifier = model.__table__.c.id
-
         assert identifier.primary_key is True
         assert isinstance(identifier.default.arg(None), UUID)
 
@@ -55,12 +54,7 @@ def test_relationships_are_mapped_without_destructive_delete_cascades() -> None:
 
 def test_enums_expose_the_expected_domain_values() -> None:
     assert set(OrderSide) == {OrderSide.BUY, OrderSide.SELL}
-    assert set(OrderType) == {
-        OrderType.MARKET,
-        OrderType.LIMIT,
-        OrderType.STOP,
-        OrderType.STOP_LIMIT,
-    }
+    assert set(OrderType) == {OrderType.MARKET, OrderType.LIMIT, OrderType.STOP, OrderType.STOP_LIMIT}
     assert set(OrderStatus) == {
         OrderStatus.NEW,
         OrderStatus.PENDING,
@@ -70,11 +64,7 @@ def test_enums_expose_the_expected_domain_values() -> None:
         OrderStatus.REJECTED,
     }
     assert set(SignalAction) == {SignalAction.BUY, SignalAction.SELL, SignalAction.HOLD}
-    assert set(AgentRunStatus) == {
-        AgentRunStatus.RUNNING,
-        AgentRunStatus.COMPLETED,
-        AgentRunStatus.FAILED,
-    }
+    assert set(AgentRunStatus) == {AgentRunStatus.RUNNING, AgentRunStatus.COMPLETED, AgentRunStatus.FAILED}
 
 
 def test_financial_fields_use_decimal_numeric_precision() -> None:
@@ -90,7 +80,6 @@ def test_financial_fields_use_decimal_numeric_precision() -> None:
         assert isinstance(column.type, Numeric)
         assert column.type.precision == 20
         assert column.type.scale == 8
-
     assert isinstance(Execution(commission=Decimal(0)).commission, Decimal)
 
 
@@ -99,16 +88,12 @@ def test_timestamps_are_timezone_aware() -> None:
         for column in table.columns:
             if isinstance(column.type, DateTime):
                 assert column.type.timezone is True
-
     assert Portfolio.__table__.c.created_at.default.arg(None).tzinfo is UTC
 
 
 def test_portfolio_symbol_constraint_and_query_indexes_exist() -> None:
     position_table = Position.__table__
-    assert any(
-        constraint.name == "uq_positions_portfolio_symbol"
-        for constraint in position_table.constraints
-    )
+    assert any(constraint.name == "uq_positions_portfolio_symbol" for constraint in position_table.constraints)
     assert {index.name for index in Order.__table__.indexes} == {
         "ix_orders_created_at",
         "ix_orders_portfolio_id",
@@ -116,9 +101,11 @@ def test_portfolio_symbol_constraint_and_query_indexes_exist() -> None:
         "ix_orders_symbol",
     }
     assert {index.name for index in Signal.__table__.indexes} == {
-        "ix_signals_generated_at",
-        "ix_signals_strategy_id",
-        "ix_signals_symbol",
+        "ix_ai_signals_generated_at",
+        "ix_ai_signals_source",
+        "ix_ai_signals_source_signal_id",
+        "ix_ai_signals_strategy_id",
+        "ix_ai_signals_symbol",
     }
     assert {index.name for index in AgentRun.__table__.indexes} == {
         "ix_agent_runs_agent_name",
@@ -127,3 +114,10 @@ def test_portfolio_symbol_constraint_and_query_indexes_exist() -> None:
         "ix_agent_runs_strategy_id",
         "ix_agent_runs_symbol",
     }
+
+
+def test_ai_signal_source_deduplication_constraint_exists() -> None:
+    assert any(
+        constraint.name == "uq_ai_signals_source_signal"
+        for constraint in Signal.__table__.constraints
+    )

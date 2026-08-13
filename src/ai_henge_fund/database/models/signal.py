@@ -8,7 +8,7 @@ from enum import StrEnum
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
-from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text
+from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from ai_henge_fund.database.base import Base, utc_now
@@ -26,9 +26,12 @@ class SignalAction(StrEnum):
 
 
 class Signal(Base):
-    """A time-stamped recommendation produced by a strategy or AI agent."""
+    """A time-stamped recommendation produced by an internal or external strategy."""
 
-    __tablename__ = "signals"
+    __tablename__ = "ai_signals"
+    __table_args__ = (
+        UniqueConstraint("source", "source_signal_id", name="uq_ai_signals_source_signal"),
+    )
 
     id: Mapped[UUID] = mapped_column(primary_key=True, default=uuid4)
     strategy_id: Mapped[UUID] = mapped_column(
@@ -42,6 +45,10 @@ class Signal(Base):
     confidence: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
     target_price: Mapped[Decimal | None] = mapped_column(Numeric(20, 8))
     reasoning: Mapped[str | None] = mapped_column(Text)
+    source: Mapped[str] = mapped_column(
+        String(64), nullable=False, default="ai_henge_fund", index=True
+    )
+    source_signal_id: Mapped[str | None] = mapped_column(String(128), index=True)
     generated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, default=utc_now, index=True
     )
