@@ -22,7 +22,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Create only the missing AI Henge Fund signal table and its indexes."""
+    """Create only the missing AI Henge Fund signal table and normalize its constraint metadata."""
     bind = op.get_bind()
     inspector = sa.inspect(bind)
 
@@ -58,6 +58,14 @@ def upgrade() -> None:
                 name="uq_ai_signals_source_signal",
             ),
         )
+
+    # The historical initial revision created a CHECK constraint for this
+    # non-native enum. The ORM model intentionally does not, so remove it when
+    # present to make the managed schema converge cleanly.
+    check_constraints = inspector.get_check_constraints("ai_signals")
+    for constraint in check_constraints:
+        if constraint.get("name") == "signal_action":
+            op.drop_constraint("signal_action", "ai_signals", type_="check")
 
     existing_indexes = {index["name"] for index in inspector.get_indexes("ai_signals")}
     for name, column in (
