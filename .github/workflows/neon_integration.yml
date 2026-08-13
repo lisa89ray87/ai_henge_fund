@@ -36,11 +36,14 @@ jobs:
       - name: Run test suite
         run: python -m pytest -q
 
-      - name: Check Alembic migration state
-        run: alembic check
+      - name: Show pre-migration state
+        run: alembic current
 
-      - name: Apply AI Henge Fund schema
+      - name: Apply AI Henge Fund additive schema
         run: alembic upgrade head
+
+      - name: Verify Alembic migration state
+        run: alembic check
 
       - name: Show migration state
         run: |
