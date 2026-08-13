@@ -41,7 +41,7 @@ _DAILY_SIGNAL_QUERY = text(
     FROM signals
     WHERE direction IN ('LONG', 'SHORT')
       AND (CAST(:since AS TIMESTAMPTZ) IS NULL OR created_at >= CAST(:since AS TIMESTAMPTZ))
-    ORDER BY created_at ASC
+    ORDER BY created_at DESC
     LIMIT :limit
     """
 )
@@ -110,10 +110,12 @@ def sync_daily_stock_signals(
     since: datetime | None = None,
     limit: int = 500,
 ) -> int:
-    """Import new daily_stock_analyse signals without changing source tables.
+    """Import recent daily_stock_analyse signals without changing source tables.
 
-    Returns the number of AI Henge Fund rows inserted. Existing source IDs are
-    deduplicated through the ``(source, source_signal_id)`` unique constraint.
+    The source query is newest-first so a bounded sync keeps following live
+    alerts even when the source table contains more than ``limit`` historical
+    rows. Existing source IDs are deduplicated through the
+    ``(source, source_signal_id)`` unique constraint.
     """
     if limit < 1 or limit > 5000:
         raise ValueError("limit must be between 1 and 5000")
