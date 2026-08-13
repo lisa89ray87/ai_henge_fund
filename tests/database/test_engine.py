@@ -48,6 +48,16 @@ def test_engine_uses_psycopg_url_and_production_pool_settings(
     assert database_engine.pool._recycle == 1800
 
 
+def test_generic_postgresql_url_is_normalized_to_psycopg3() -> None:
+    for database_url in (
+        "postgresql://user:password@example.neon.tech/database?sslmode=require",
+        "postgres://user:password@example.neon.tech/database?sslmode=require",
+        "postgresql+psycopg2://user:password@example.neon.tech/database?sslmode=require",
+    ):
+        normalized = engine.normalize_database_url(database_url)
+        assert normalized.startswith("postgresql+psycopg://")
+
+
 def test_session_factory_can_be_constructed_without_connecting(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
