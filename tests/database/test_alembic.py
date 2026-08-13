@@ -39,9 +39,7 @@ def test_alembic_configuration_loads_without_a_database_url() -> None:
     assert config.get_main_option("sqlalchemy.url") is None
 
 
-def test_application_database_url_is_used_without_persisting_it(
-    monkeypatch,
-) -> None:
+def test_application_database_url_is_used_without_persisting_it(monkeypatch) -> None:
     environment = load_alembic_environment()
     database_url = "postgresql+psycopg://user:password@example.neon.tech/database?sslmode=require"
     monkeypatch.setattr(
@@ -54,6 +52,24 @@ def test_application_database_url_is_used_without_persisting_it(
     assert "sqlalchemy.url" not in Config(str(ALEMBIC_INI_PATH)).get_section("alembic")
 
 
+def test_generic_postgresql_urls_are_normalized_to_psycopg3(monkeypatch) -> None:
+    environment = load_alembic_environment("test_alembic_environment_psycopg3")
+
+    for database_url in (
+        "postgresql://user:password@example.neon.tech/database?sslmode=require",
+        "postgres://user:password@example.neon.tech/database?sslmode=require",
+        "postgresql+psycopg2://user:password@example.neon.tech/database?sslmode=require",
+    ):
+        monkeypatch.setattr(
+            environment,
+            "get_settings",
+            lambda url=database_url: SimpleNamespace(database_url=SecretStr(url)),
+        )
+        normalized = environment.get_database_url()
+        assert normalized.startswith("postgresql+psycopg://")
+        assert "password" in normalized
+
+
 def test_target_metadata_is_the_project_base_metadata() -> None:
     environment = load_alembic_environment()
 
@@ -62,7 +78,7 @@ def test_target_metadata_is_the_project_base_metadata() -> None:
 
 def test_importing_environment_does_not_create_an_engine(monkeypatch) -> None:
     engine_factory = MagicMock()
-    monkeypatch.setattr(sqlalchemy, "engine_from_config", engine_factory)
+    monkeypatch.setattr(sqlalchemy, "create_engine", engine_factory)
 
     load_alembic_environment("test_alembic_environment_without_engine")
 
