@@ -40,7 +40,7 @@ _DAILY_SIGNAL_QUERY = text(
         updated_at
     FROM signals
     WHERE direction IN ('LONG', 'SHORT')
-      AND (:since IS NULL OR created_at >= :since)
+      AND (CAST(:since AS TIMESTAMPTZ) IS NULL OR created_at >= CAST(:since AS TIMESTAMPTZ))
     ORDER BY created_at ASC
     LIMIT :limit
     """
