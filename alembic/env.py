@@ -10,6 +10,17 @@ from sqlalchemy.engine import make_url
 from ai_henge_fund.config.settings import get_settings
 from ai_henge_fund.database.base import Base
 
+# These tables are owned by the existing daily_stock_analyse application.
+# AI Henge Fund consumes their data but must never manage, rename, or drop them.
+EXTERNAL_DAILY_STOCK_TABLES = frozenset(
+    {
+        "analysis_runs",
+        "signals",
+        "signal_outcomes",
+        "schema_migrations",
+    }
+)
+
 
 def load_model_metadata() -> None:
     """Import all mapped models before Alembic reads the shared metadata."""
@@ -53,6 +64,19 @@ def get_database_url() -> str:
     return parsed.render_as_string(hide_password=False)
 
 
+def include_object(object_, name: str | None, type_: str, reflected: bool, compare_to) -> bool:
+    """Keep Alembic from managing tables owned by Daily Stock Analysis.
+
+    Reflected objects from the external integration schema are intentionally
+    excluded from autogenerate comparisons. This prevents `alembic check`
+    from proposing DROP TABLE/DROP INDEX operations for the existing signal
+    and market-analysis data.
+    """
+    if type_ == "table" and name in EXTERNAL_DAILY_STOCK_TABLES:
+        return False
+    return True
+
+
 def run_migrations_offline() -> None:
     """Run migrations without a live database connection."""
     context.configure(
@@ -61,6 +85,7 @@ def run_migrations_offline() -> None:
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
+        include_object=include_object,
     )
 
     with context.begin_transaction():
@@ -76,7 +101,12 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
-        context.configure(connection=connection, target_metadata=target_metadata, compare_type=True)
+        context.configure(
+            connection=connection,
+            target_metadata=target_metadata,
+            compare_type=True,
+            include_object=include_object,
+        )
 
         with context.begin_transaction():
             context.run_migrations()
