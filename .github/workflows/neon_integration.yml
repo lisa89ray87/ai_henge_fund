@@ -52,3 +52,6 @@ jobs:
 
       - name: Import existing daily_stock_analyse signals
         run: python scripts/sync_daily_stock_signals.py
+
+      - name: Verify signal bridge and idempotency
+        run: python scripts/verify_daily_stock_signal_sync.py
