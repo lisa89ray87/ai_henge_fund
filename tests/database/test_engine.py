@@ -1,4 +1,4 @@
-"""Tests for lazy database engine and session construction."""
+"""Tests for lazy SQLAlchemy engine and session construction."""
 
 from types import SimpleNamespace
 
@@ -24,7 +24,7 @@ def test_engine_is_not_created_during_module_import() -> None:
 
 
 def test_test_configuration_does_not_require_a_database_url() -> None:
-    settings = AppSettings(_env_file=None, app_env="test", debug=False)
+    settings = AppSettings(_env_file=None, app_env="test", debug=False, database_url=None)
 
     assert settings.database_url is None
 
