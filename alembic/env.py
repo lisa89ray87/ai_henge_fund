@@ -4,7 +4,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from alembic.config import Config
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, pool
 from sqlalchemy.engine import URL
 
 from ai_henge_fund.config.settings import get_settings
@@ -72,7 +72,7 @@ def run_migrations_online() -> None:
     connectable = create_engine(
         get_database_url(),
         pool_pre_ping=True,
-        poolclass=__import__("sqlalchemy").pool.NullPool,
+        poolclass=pool.NullPool,
     )
 
     with connectable.connect() as connection:
