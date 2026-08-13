@@ -2,12 +2,13 @@
 
 from logging.config import fileConfig
 
+from alembic import context
 from alembic.config import Config
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine
+from sqlalchemy.engine import URL
 
 from ai_henge_fund.config.settings import get_settings
 from ai_henge_fund.database.base import Base
-from alembic import context
 
 
 def load_model_metadata() -> None:
@@ -40,7 +41,16 @@ def get_database_url() -> str:
     database_url = get_settings().database_url
     if database_url is None or not database_url.get_secret_value().strip():
         raise RuntimeError("DATABASE_URL must be configured before running migrations.")
-    return database_url.get_secret_value()
+
+    value = database_url.get_secret_value().strip()
+    parsed = URL.make_url(value)
+
+    # The project standard is psycopg 3. Normalize generic PostgreSQL URLs so
+    # Alembic never falls back to SQLAlchemy's legacy psycopg2 dialect.
+    if parsed.drivername in {"postgres", "postgresql", "postgresql+psycopg2"}:
+        parsed = parsed.set(drivername="postgresql+psycopg")
+
+    return parsed.render_as_string(hide_password=False)
 
 
 def run_migrations_offline() -> None:
@@ -59,15 +69,10 @@ def run_migrations_offline() -> None:
 
 def run_migrations_online() -> None:
     """Run migrations using the same configured URL as the application."""
-    config = get_alembic_config()
-    configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_database_url()
-
-    connectable = engine_from_config(
-        configuration,
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-        future=True,
+    connectable = create_engine(
+        get_database_url(),
+        pool_pre_ping=True,
+        poolclass=__import__("sqlalchemy").pool.NullPool,
     )
 
     with connectable.connect() as connection:
@@ -75,6 +80,8 @@ def run_migrations_online() -> None:
 
         with context.begin_transaction():
             context.run_migrations()
+
+    connectable.dispose()
 
 
 def run_migrations() -> None:
