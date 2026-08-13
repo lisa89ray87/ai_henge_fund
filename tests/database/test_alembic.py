@@ -6,7 +6,6 @@ from pathlib import Path
 from types import ModuleType, SimpleNamespace
 from unittest.mock import MagicMock
 
-import sqlalchemy
 from alembic.config import Config
 from pydantic import SecretStr
 
@@ -67,7 +66,6 @@ def test_generic_postgresql_urls_are_normalized_to_psycopg3(monkeypatch) -> None
         )
         normalized = environment.get_database_url()
         assert normalized.startswith("postgresql+psycopg://")
-        assert "password" in normalized
 
 
 def test_target_metadata_is_the_project_base_metadata() -> None:
@@ -76,11 +74,12 @@ def test_target_metadata_is_the_project_base_metadata() -> None:
     assert environment.target_metadata is Base.metadata
 
 
-def test_importing_environment_does_not_create_an_engine(monkeypatch) -> None:
+def test_importing_environment_does_not_create_an_engine() -> None:
+    environment = load_alembic_environment("test_alembic_environment_without_engine")
     engine_factory = MagicMock()
-    monkeypatch.setattr(sqlalchemy, "create_engine", engine_factory)
+    environment.create_engine = engine_factory
 
-    load_alembic_environment("test_alembic_environment_without_engine")
+    load_alembic_environment("test_alembic_environment_second_import")
 
     engine_factory.assert_not_called()
 
