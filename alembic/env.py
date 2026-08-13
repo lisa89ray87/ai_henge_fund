@@ -5,7 +5,7 @@ from logging.config import fileConfig
 from alembic import context
 from alembic.config import Config
 from sqlalchemy import create_engine, pool
-from sqlalchemy.engine import URL
+from sqlalchemy.engine import make_url
 
 from ai_henge_fund.config.settings import get_settings
 from ai_henge_fund.database.base import Base
@@ -43,7 +43,7 @@ def get_database_url() -> str:
         raise RuntimeError("DATABASE_URL must be configured before running migrations.")
 
     value = database_url.get_secret_value().strip()
-    parsed = URL.make_url(value)
+    parsed = make_url(value)
 
     # The project standard is psycopg 3. Normalize generic PostgreSQL URLs so
     # Alembic never falls back to SQLAlchemy's legacy psycopg2 dialect.
