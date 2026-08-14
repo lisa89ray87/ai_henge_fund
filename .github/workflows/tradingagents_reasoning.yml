@@ -12,6 +12,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       DEBUG: "false"
       PYTHON_ENV: production
 
@@ -29,13 +30,17 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .
 
-      - name: Validate required secret is configured
+      - name: Validate required secrets are configured
         shell: bash
         run: |
           if [ -z "$DATABASE_URL" ]; then
             echo "NEON_DATABASE_URL GitHub Actions secret is not configured for this repository."
             exit 1
           fi
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "OPENAI_API_KEY GitHub Actions secret is not configured for this repository."
+            exit 1
+          fi
 
-      - name: Run safe TradingAgents reasoning boundary
+      - name: Run real TradingAgents reasoning boundary
         run: python scripts/run_tradingagents_reasoning.py
