@@ -4,10 +4,17 @@ The daily_stock_analyse engine remains the source of truth for imported
 signals. TradingAgents is used as a read-only reasoning layer: it analyzes the
 symbol/date and returns an independent research decision. This module does not
 place orders or connect to a broker.
+
+LLM provider behavior is deliberately resilient:
+- OpenAI is preferred when its key is available.
+- Gemini/Google is used automatically when OpenAI is unavailable.
+- If an OpenAI call fails with a quota/rate-limit/authentication style error,
+  the same analysis is retried once with Gemini when its key is available.
 """
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -67,6 +74,11 @@ class TradingAgentsBridge:
 class TradingAgentsGraphRuntime:
     """Production adapter around TauricResearch TradingAgentsGraph.
 
+    The runtime selects OpenAI first and Gemini second. If the primary OpenAI
+    request fails for a provider-level condition such as quota exhaustion,
+    rate limiting, billing/authentication failure, or HTTP 429, the analysis is
+    retried with Gemini when GEMINI_API_KEY is configured.
+
     TradingAgents receives only a ticker and analysis date. It performs its own
     research/data retrieval and returns an independent decision. No broker or
     order API is called here.
@@ -82,13 +94,81 @@ class TradingAgentsGraphRuntime:
                 "dependencies before running the real reasoning workflow."
             ) from exc
 
-        config = DEFAULT_CONFIG.copy()
-        # Keep the verification run bounded while exercising the real graph.
+        self._default_config = DEFAULT_CONFIG.copy()
+        self._graph_cls = TradingAgentsGraph
+        self._graphs: dict[str, Any] = {}
+
+        if self._has_key("OPENAI_API_KEY"):
+            self._primary_provider = "openai"
+        elif self._has_gemini_key():
+            self._primary_provider = "google"
+        else:
+            raise RuntimeError(
+                "No AI provider is configured. Set OPENAI_API_KEY and/or GEMINI_API_KEY."
+            )
+
+    @staticmethod
+    def _has_key(name: str) -> bool:
+        return bool(os.getenv(name, "").strip())
+
+    @classmethod
+    def _has_gemini_key(cls) -> bool:
+        return cls._has_key("GEMINI_API_KEY") or cls._has_key("GOOGLE_API_KEY")
+
+    @classmethod
+    def _prepare_google_key(cls) -> None:
+        """Map our user-facing GEMINI_API_KEY secret to TradingAgents' GOOGLE_API_KEY."""
+        if not cls._has_key("GOOGLE_API_KEY") and cls._has_key("GEMINI_API_KEY"):
+            os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
+
+    def _build_graph(self, provider: str) -> Any:
+        if provider in self._graphs:
+            return self._graphs[provider]
+
+        config = self._default_config.copy()
+        config["llm_provider"] = provider
         config["max_debate_rounds"] = 1
         config["max_risk_discuss_rounds"] = 1
-        self._graph = TradingAgentsGraph(debug=False, config=config)
 
-    def analyze(self, request: dict[str, Any]) -> TradingAgentsDecision:
+        if provider == "google":
+            self._prepare_google_key()
+            config["deep_think_llm"] = os.getenv(
+                "GEMINI_DEEP_THINK_LLM", "gemini-2.5-pro"
+            )
+            config["quick_think_llm"] = os.getenv(
+                "GEMINI_QUICK_THINK_LLM", "gemini-2.5-flash"
+            )
+        else:
+            config["deep_think_llm"] = os.getenv(
+                "TRADINGAGENTS_DEEP_THINK_LLM", "gpt-4.1"
+            )
+            config["quick_think_llm"] = os.getenv(
+                "TRADINGAGENTS_QUICK_THINK_LLM", "gpt-4.1-mini"
+            )
+
+        self._graphs[provider] = self._graph_cls(debug=False, config=config)
+        return self._graphs[provider]
+
+    @staticmethod
+    def _is_provider_failure(exc: Exception) -> bool:
+        """Return True only for failures where changing LLM providers is sensible."""
+        message = str(exc).lower()
+        markers = (
+            "429",
+            "rate limit",
+            "rate_limit",
+            "quota",
+            "insufficient_quota",
+            "billing",
+            "credit balance",
+            "authentication",
+            "unauthorized",
+            "invalid api key",
+            "api key is invalid",
+        )
+        return any(marker in message for marker in markers)
+
+    def _run(self, provider: str, request: dict[str, Any]) -> TradingAgentsDecision:
         symbol = str(request["symbol"]).strip().upper()
         generated_at = request.get("generated_at")
         if generated_at:
@@ -96,7 +176,7 @@ class TradingAgentsGraphRuntime:
         else:
             analysis_date = datetime.now().date().isoformat()
 
-        _, decision = self._graph.propagate(symbol, analysis_date)
+        _, decision = self._build_graph(provider).propagate(symbol, analysis_date)
         if not isinstance(decision, dict):
             raise RuntimeError(
                 f"TradingAgents returned an unexpected decision type for {symbol}: "
@@ -114,5 +194,22 @@ class TradingAgentsGraphRuntime:
             action=action,
             confidence=confidence,
             rationale=rationale,
-            provider="tradingagents-graph",
+            provider=f"tradingagents-graph:{provider}",
         )
+
+    def analyze(self, request: dict[str, Any]) -> TradingAgentsDecision:
+        """Run the primary provider and fall back to Gemini when appropriate."""
+        primary = self._primary_provider
+        try:
+            return self._run(primary, request)
+        except Exception as primary_exc:
+            if primary != "openai" or not self._has_gemini_key():
+                raise
+            if not self._is_provider_failure(primary_exc):
+                raise
+
+            print(
+                "OpenAI provider failed with a provider-level error; "
+                "retrying this analysis with Gemini."
+            )
+            return self._run("google", request)
