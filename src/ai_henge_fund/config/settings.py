@@ -22,9 +22,13 @@ class AppSettings(BaseSettings):
     debug: bool = False
     log_level: str = "INFO"
 
-    # OpenAI
+    # LLM providers
+    # OpenAI remains the primary provider when both keys are available.
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4.1"
+    gemini_api_key: SecretStr | None = None
+    gemini_deep_think_llm: str = "gemini-2.5-pro"
+    gemini_quick_think_llm: str = "gemini-2.5-flash"
 
     # Database
     database_url: SecretStr | None = None
