@@ -52,9 +52,7 @@ class TradingAgentsBridge:
             "symbol": signal.symbol,
             "action": signal.action.value if hasattr(signal.action, "value") else str(signal.action),
             "confidence": float(signal.confidence) if signal.confidence is not None else None,
-            "target_price": (
-                float(signal.target_price) if signal.target_price is not None else None
-            ),
+            "target_price": float(signal.target_price) if signal.target_price is not None else None,
             "reasoning": signal.reasoning,
             "source": signal.source,
             "source_signal_id": signal.source_signal_id,
@@ -74,27 +72,24 @@ class TradingAgentsBridge:
 class TradingAgentsGraphRuntime:
     """Production adapter around TauricResearch TradingAgentsGraph.
 
-    The runtime selects OpenAI first and Gemini second. If the primary OpenAI
-    request fails for a provider-level condition such as quota exhaustion,
-    rate limiting, billing/authentication failure, or HTTP 429, the analysis is
-    retried with Gemini when GEMINI_API_KEY is configured.
-
-    TradingAgents receives only a ticker and analysis date. It performs its own
-    research/data retrieval and returns an independent decision. No broker or
-    order API is called here.
+    We intentionally do not import ``DEFAULT_CONFIG`` here. Some packaged
+    TradingAgents builds expose the graph but do not expose that convenience
+    constant at the package root. The graph accepts a normal configuration
+    dictionary, so using an explicit minimal configuration keeps this adapter
+    compatible with the installed package while still allowing environment
+    overrides.
     """
 
     def __init__(self) -> None:
         try:
-            from tradingagents.default_config import DEFAULT_CONFIG
             from tradingagents.graph.trading_graph import TradingAgentsGraph
         except ImportError as exc:
             raise RuntimeError(
-                "The tradingagents package is not installed. Install the project "
-                "dependencies before running the real reasoning workflow."
+                "The installed TradingAgents package does not expose "
+                "tradingagents.graph.trading_graph.TradingAgentsGraph. "
+                "Verify that tradingagents>=0.3.1,<0.4.0 is installed."
             ) from exc
 
-        self._default_config = DEFAULT_CONFIG.copy()
         self._graph_cls = TradingAgentsGraph
         self._graphs: dict[str, Any] = {}
 
@@ -125,10 +120,11 @@ class TradingAgentsGraphRuntime:
         if provider in self._graphs:
             return self._graphs[provider]
 
-        config = self._default_config.copy()
-        config["llm_provider"] = provider
-        config["max_debate_rounds"] = 1
-        config["max_risk_discuss_rounds"] = 1
+        config: dict[str, Any] = {
+            "llm_provider": provider,
+            "max_debate_rounds": 1,
+            "max_risk_discuss_rounds": 1,
+        }
 
         if provider == "google":
             self._prepare_google_key()
