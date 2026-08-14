@@ -1,19 +1,22 @@
-"""Run the safe TradingAgents reasoning boundary over imported signals."""
+"""Run the real TradingAgents reasoning boundary over imported signals."""
 
 from __future__ import annotations
 
 from datetime import datetime, timezone
 
 from ai_henge_fund.agents.tradingagents_bridge import (
-    PassthroughTradingAgentsRuntime,
     TradingAgentsBridge,
+    TradingAgentsGraphRuntime,
 )
 from ai_henge_fund.database.models import AgentRun, AgentRunStatus, Signal
 from ai_henge_fund.database.session import session_scope
 
 
 def main() -> int:
-    bridge = TradingAgentsBridge(PassthroughTradingAgentsRuntime())
+    # This is deliberately the real TradingAgents graph, not the development
+    # passthrough. TradingAgents remains analysis-only; no broker/order API is
+    # called by this workflow.
+    bridge = TradingAgentsBridge(TradingAgentsGraphRuntime())
     processed = 0
 
     with session_scope() as session:
@@ -23,6 +26,11 @@ def main() -> int:
             .limit(20)
             .all()
         )
+
+        if not signals:
+            print("No imported signals are available for TradingAgents reasoning.")
+            print("TradingAgents reasoning stage: PASS (nothing to process)")
+            return 0
 
         for signal in signals:
             started = datetime.now(timezone.utc)
@@ -46,13 +54,17 @@ def main() -> int:
                     f"provider={decision.provider}; rationale={decision.rationale}"
                 )
                 processed += 1
+                print(
+                    f"TradingAgents analyzed {signal.symbol}: "
+                    f"action={decision.action}, confidence={decision.confidence}"
+                )
             except Exception as exc:
                 agent_run.status = AgentRunStatus.FAILED
                 agent_run.completed_at = datetime.now(timezone.utc)
                 agent_run.error_message = str(exc)
                 raise
 
-    print(f"TradingAgents reasoning runs completed: {processed}")
+    print(f"Imported signals processed by real TradingAgents: {processed}")
     print("TradingAgents reasoning stage: PASS")
     return 0
 
