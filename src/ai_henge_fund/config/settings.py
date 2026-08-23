@@ -23,7 +23,6 @@ class AppSettings(BaseSettings):
     log_level: str = "INFO"
 
     # LLM providers
-    # OpenAI remains the primary provider when both keys are available.
     openai_api_key: SecretStr | None = None
     openai_model: str = "gpt-4.1"
     gemini_api_key: SecretStr | None = None
@@ -39,12 +38,17 @@ class AppSettings(BaseSettings):
     tradingagents_quick_think_llm: str = "gpt-4.1-mini"
     tradingagents_backend_url: str | None = None
 
-    # Moomoo MCP: this integration is intentionally read-only in Stages 1 and 2.
+    # Moomoo market data / OpenD
     moomoo_mcp_enabled: bool = False
     moomoo_mcp_url: str | None = None
     moomoo_read_only: bool = True
     moomoo_opend_host: str = "127.0.0.1"
     moomoo_opend_port: int = 11111
+
+    # Moomoo paper execution. This is the only execution mode currently allowed.
+    moomoo_paper_trading_enabled: bool = False
+    moomoo_live_trading_enabled: bool = False
+    moomoo_paper_fill_timeout_seconds: int = 30
 
     # Streamlit
     streamlit_server_port: int = 8501
@@ -52,19 +56,24 @@ class AppSettings(BaseSettings):
     @field_validator("log_level")
     @classmethod
     def normalize_log_level(cls, value: str) -> str:
-        """Normalize log levels so downstream logging receives a consistent value."""
         return value.upper()
 
     @model_validator(mode="after")
     def validate_stage_safety(self) -> "AppSettings":
-        """Enforce Stage 1/2 database and Moomoo safety constraints."""
+        """Require a DB outside tests and permanently fail closed for live trading."""
         if self.app_env != "test" and (
             self.database_url is None or not self.database_url.get_secret_value().strip()
         ):
             raise ValueError("DATABASE_URL must be provided when APP_ENV is not 'test'.")
 
-        if not self.moomoo_read_only:
-            raise ValueError("Moomoo must remain read-only during Stage 1 and Stage 2.")
+        if self.moomoo_live_trading_enabled:
+            raise ValueError(
+                "Live Moomoo trading is disabled by project safety policy. "
+                "Only the SIMULATE paper environment is supported."
+            )
+
+        if self.moomoo_paper_fill_timeout_seconds < 1:
+            raise ValueError("MOOMOO_PAPER_FILL_TIMEOUT_SECONDS must be at least 1 second.")
 
         return self
 
