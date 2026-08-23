@@ -52,19 +52,19 @@ class TradingAgentsAdapter:
         }
 
         if self.runner is None:
-    	    fallback_decision = {
+            fallback_decision = {
                 "LONG": "BUY",
-        	"SHORT": "SELL",
-        	"NEUTRAL": "WAIT",
-    	    }.get(signal.direction, "WAIT")
+                "SHORT": "SELL",
+                "NEUTRAL": "WAIT",
+            }.get(signal.direction, "WAIT")
 
-    	    return AITradeDecision(
-        	snapshot.symbol,
-        	fallback_decision,
-        	0.0,
-        	"TradingAgents runner not configured; deterministic signal only",
-        	"deterministic-fallback",
-    	    )
+            return AITradeDecision(
+                snapshot.symbol,
+                fallback_decision,
+                0.0,
+                "TradingAgents runner not configured; deterministic signal only",
+                "deterministic-fallback",
+            )
 
         result = self.runner.analyze(payload)
         decision = str(result.get("decision", "WAIT")).upper()
