@@ -1,0 +1,32 @@
+name: Moomoo OpenD Read-Only Test
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: moomoo-opend-readonly
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: [self-hosted, Windows, X64]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check Python
+        shell: powershell
+        run: |
+          python --version
+          python -c "import sys; print(sys.executable)"
+
+      - name: Check Moomoo SDK
+        shell: powershell
+        run: |
+          python -c "import moomoo; print('Moomoo SDK: PASS')"
+
+      - name: Verify Moomoo OpenD read-only market data
+        shell: powershell
+        run: |
+          python scripts/test_moomoo_my_readonly.py
