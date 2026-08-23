@@ -1,4 +1,4 @@
-name: Moomoo OpenD Read-Only Test
+name: Moomoo OpenD Read-Only Market Data Test
 
 on:
   workflow_dispatch:
