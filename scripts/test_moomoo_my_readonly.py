@@ -1,4 +1,4 @@
-"""Read-only Moomoo MY/OpenD connectivity test.
+"""Read-only Moomoo US/OpenD connectivity test.
 
 This script deliberately uses quote APIs only. It does not import or call any
 trading/execution API.
@@ -13,11 +13,10 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-
 HOST = "127.0.0.1"
 PORT = 11111
-# Moomoo OpenAPI uses the MY market prefix for Bursa Malaysia securities.
-SYMBOL = "MY.1155"
+# US stocks use the US.<TICKER> security-code format in Moomoo OpenAPI.
+SYMBOL = "US.AAPL"
 
 
 def main() -> int:
@@ -32,7 +31,7 @@ def main() -> int:
     quote_ctx = None
     try:
         print("=" * 60)
-        print("Moomoo MY Read-Only Connectivity Test")
+        print("Moomoo US Read-Only Connectivity Test")
         print("=" * 60)
         print(f"OpenD endpoint: {HOST}:{PORT}")
         print(f"Test symbol:    {SYMBOL}")
@@ -54,7 +53,7 @@ def main() -> int:
         if ret_sub != RET_OK:
             print("Market-data subscription: FAILED")
             print(f"Reason: {sub_message}")
-            print("This can indicate a market-data permission or OpenD issue.")
+            print("Check US Market Stocks quote permissions in Moomoo.")
             return 4
 
         print("Market-data subscription: PASS")
