@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from typing import Any, Mapping
 
-from .moomoo import MoomooAdapterError
+from .moomoo import MoomooAdapterError, MoomooMarketData
 
 
 class MoomooOpenDTransport:
@@ -67,7 +67,7 @@ class MoomooOpenDTransport:
     def get_candles(self, symbol: str, num: int, interval: str) -> list[Mapping[str, Any]]:
         ctx = self._context()
         try:
-            from moomoo import AuType, KLType, RET_OK, SubType
+            from moomoo import AuType, KLType, RET_OK
             ktype_name = self._INTERVALS.get(interval.lower())
             if ktype_name is None:
                 raise ValueError(f"Unsupported candle interval: {interval}")
@@ -107,3 +107,12 @@ class MoomooOpenDTransport:
 
     def __exit__(self, exc_type: Any, exc: Any, tb: Any) -> None:
         self.close()
+
+
+def build_moomoo_opend_market_data() -> MoomooMarketData:
+    """Build the local OpenD market-data facade when explicitly enabled."""
+    enabled = os.getenv("MOOMOO_OPEND_ENABLED", "false").strip().lower() == "true"
+    read_only = os.getenv("MOOMOO_READ_ONLY", "true").strip().lower() == "true"
+    if not enabled or not read_only:
+        return MoomooMarketData(enabled=False)
+    return MoomooMarketData(MoomooOpenDTransport(), enabled=True)
