@@ -10,7 +10,9 @@ from moomoo import OpenSecTradeContext, OrderStatus, SecurityFirm, TrdEnv, TrdMa
 class MoomooOrderStatus:
     order_id: str
     status: str
+    submitted_quantity: float
     filled_quantity: float
+    remaining_quantity: float
     average_price: float | None
 
 
@@ -38,26 +40,41 @@ class MoomooPaperOrderMonitor:
             raise LookupError(f"Paper order {order_id} was not found")
 
         row = rows.iloc[0]
-        filled = float(row.get("qty", 0) or 0) - float(row.get("qty_remaining", 0) or 0)
+        submitted = float(row.get("qty", 0) or 0)
+        remaining = float(row.get("qty_remaining", submitted) or 0)
+        # Do not infer a fill from qty alone. Moomoo may expose qty_remaining
+        # differently by order state. Explicit fill quantity, when available,
+        # is authoritative; otherwise a non-filled order is reported as zero.
+        raw_filled = row.get("qty_filled")
+        if raw_filled not in (None, "", "nan"):
+            filled = max(0.0, float(raw_filled))
+        elif str(row.get("order_status", "UNKNOWN")) == str(OrderStatus.FILLED):
+            filled = submitted
+        else:
+            filled = 0.0
+
         avg = row.get("fill_avg_price")
+        average_price = float(avg) if avg not in (None, "", "nan") else None
         return MoomooOrderStatus(
             order_id=str(order_id),
             status=str(row.get("order_status", "UNKNOWN")),
-            filled_quantity=max(0.0, filled),
-            average_price=float(avg) if avg not in (None, "", "nan") else None,
+            submitted_quantity=submitted,
+            filled_quantity=filled,
+            remaining_quantity=max(0.0, submitted - filled) if filled else remaining,
+            average_price=average_price,
         )
 
     def wait_for_terminal(self, order_id: str, timeout_seconds: int = 30, interval_seconds: float = 2.0) -> MoomooOrderStatus:
         terminal = {
-            OrderStatus.FILLED,
-            OrderStatus.CANCELLED_ALL,
-            OrderStatus.CANCELLED_PART,
-            OrderStatus.FAILED,
-            OrderStatus.DISABLED,
+            str(OrderStatus.FILLED),
+            str(OrderStatus.CANCELLED_ALL),
+            str(OrderStatus.CANCELLED_PART),
+            str(OrderStatus.FAILED),
+            str(OrderStatus.DISABLED),
         }
         elapsed = 0.0
         latest = self.get(order_id)
-        while latest.status not in {str(x) for x in terminal} and elapsed < timeout_seconds:
+        while latest.status not in terminal and elapsed < timeout_seconds:
             sleep(interval_seconds)
             elapsed += interval_seconds
             latest = self.get(order_id)
