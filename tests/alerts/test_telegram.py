@@ -1,4 +1,4 @@
-from ai_hedge_fund.alerts.telegram import TelegramConfig, TelegramNotifier
+from ai_henge_fund.alerts.telegram import TelegramConfig, TelegramNotifier
 
 
 def test_disabled_telegram_does_not_send(monkeypatch):

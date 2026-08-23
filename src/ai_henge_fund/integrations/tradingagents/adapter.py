@@ -40,7 +40,7 @@ class TradingAgentsAdapter:
     def _get_graph(self) -> Any:
         if self._graph is None:
             try:
-                from tradingagents.default_config import DEFAULT_CONFIG
+                from tradingagents.config import TradingAgentsConfig
                 from tradingagents.graph.trading_graph import TradingAgentsGraph
             except ImportError as exc:
                 raise RuntimeError(
@@ -48,13 +48,19 @@ class TradingAgentsAdapter:
                     "optional dependency before running live analysis."
                 ) from exc
 
-            config = DEFAULT_CONFIG.copy()
-            config["llm_provider"] = self._llm_provider
-            config["deep_think_llm"] = self._deep_think_llm
-            config["quick_think_llm"] = self._quick_think_llm
-            if self._backend_url:
-                config["backend_url"] = self._backend_url
-            self._graph = TradingAgentsGraph(debug=self._debug, config=config)
+            config = TradingAgentsConfig(
+                llm_provider=self._llm_provider,
+                deep_think_llm=self._deep_think_llm,
+                quick_think_llm=self._quick_think_llm,
+                max_debate_rounds=1,
+                max_risk_discuss_rounds=1,
+                max_recur_limit=25,
+            )
+
+            self._graph = TradingAgentsGraph(
+                debug=self._debug,
+                config=config,
+            )
         return self._graph
 
     def analyze(self, symbol: str, analysis_date: date) -> TradingAgentsDecision:

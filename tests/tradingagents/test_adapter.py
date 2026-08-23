@@ -1,6 +1,6 @@
-from ai_hedge_fund.market_data.signal_snapshot import SignalSnapshot
-from ai_hedge_fund.signal_engine.deterministic import DeterministicSignalEngine
-from ai_hedge_fund.tradingagents.adapter import TradingAgentsAdapter
+from ai_henge_fund.market_data.signal_snapshot import SignalSnapshot
+from ai_henge_fund.signal_engine.deterministic import DeterministicSignalEngine
+from ai_henge_fund.tradingagents.adapter import TradingAgentsAdapter
 
 
 def make_snapshot():

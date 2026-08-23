@@ -1,6 +1,6 @@
 import pytest
 
-from ai_hedge_fund.paper_trading.engine import PaperTradingEngine
+from ai_henge_fund.paper_trading.engine import PaperTradingEngine
 
 
 def test_paper_trade_is_filled_without_broker_access() -> None:

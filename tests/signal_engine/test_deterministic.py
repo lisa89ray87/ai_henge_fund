@@ -1,5 +1,5 @@
-from ai_hedge_fund.market_data.signal_snapshot import SignalSnapshot
-from ai_hedge_fund.signal_engine.deterministic import DeterministicSignalEngine
+from ai_henge_fund.market_data.signal_snapshot import SignalSnapshot
+from ai_henge_fund.signal_engine.deterministic import DeterministicSignalEngine
 
 
 def snapshot(closes, state="REGULAR"):

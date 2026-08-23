@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from ai_hedge_fund.persistence.events import InMemoryTradeEventStore, TradeEvent
+from ai_henge_fund.persistence.events import InMemoryTradeEventStore, TradeEvent
 
 
 def test_trade_event_store_preserves_audit_event():

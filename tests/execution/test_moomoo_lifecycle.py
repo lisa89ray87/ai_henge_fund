@@ -3,10 +3,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from ai_hedge_fund.execution.moomoo_order_monitor import MoomooOrderStatus
-from ai_hedge_fund.execution.moomoo_paper import MoomooPaperOrder
-from ai_hedge_fund.paper_trading.moomoo_lifecycle import MoomooPaperTradeLifecycle
-from ai_hedge_fund.portfolio.manager import PositionManager
+from ai_henge_fund.execution.moomoo_order_monitor import MoomooOrderStatus
+from ai_henge_fund.execution.moomoo_paper import MoomooPaperOrder
+from ai_henge_fund.paper_trading.moomoo_lifecycle import MoomooPaperTradeLifecycle
+from ai_henge_fund.portfolio.manager import PositionManager
 
 
 @dataclass

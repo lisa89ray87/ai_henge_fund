@@ -1,4 +1,4 @@
-from ai_hedge_fund.paper_trading import PaperTradeService, PaperTradingEngine
+from ai_henge_fund.paper_trading import PaperTradeService, PaperTradingEngine
 
 
 class FakeTelegram:

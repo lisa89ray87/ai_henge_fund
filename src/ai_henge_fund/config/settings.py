@@ -42,6 +42,7 @@ class AppSettings(BaseSettings):
     moomoo_mcp_enabled: bool = False
     moomoo_mcp_url: str | None = None
     moomoo_read_only: bool = True
+    s_only: bool = True
     moomoo_opend_host: str = "127.0.0.1"
     moomoo_opend_port: int = 11111
 
@@ -65,6 +66,12 @@ class AppSettings(BaseSettings):
             self.database_url is None or not self.database_url.get_secret_value().strip()
         ):
             raise ValueError("DATABASE_URL must be provided when APP_ENV is not 'test'.")
+
+        if not self.moomoo_read_only:
+            raise ValueError(
+                "Moomoo must remain read-only. "
+                "Live Moomoo market-data access cannot be used for trading."
+            )
 
         if self.moomoo_live_trading_enabled:
             raise ValueError(

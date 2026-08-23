@@ -19,10 +19,8 @@ def test_adapter_defers_optional_import(monkeypatch):
         def propagate(self, symbol, analysis_date):
             return ({"trace": True}, {"action": "BUY", "confidence": 0.8})
 
-    import tradingagents.default_config as default_config
     import tradingagents.graph.trading_graph as trading_graph
 
-    monkeypatch.setattr(default_config, "DEFAULT_CONFIG", {"existing": "value"})
     monkeypatch.setattr(trading_graph, "TradingAgentsGraph", FakeGraph)
 
     result = adapter.analyze("NVDA", date(2026, 8, 14))
@@ -30,7 +28,9 @@ def test_adapter_defers_optional_import(monkeypatch):
     assert result.symbol == "NVDA"
     assert result.analysis_date == date(2026, 8, 14)
     assert result.raw_decision["action"] == "BUY"
-    assert adapter._graph.kwargs["config"]["llm_provider"] == "openai"
+    assert adapter._graph.kwargs["config"].llm_provider == "openai"
+    assert adapter._graph.kwargs["config"].deep_think_llm == "gpt-4.1"
+    assert adapter._graph.kwargs["config"].quick_think_llm == "gpt-4.1-mini"
 
 
 def test_missing_tradingagents_has_actionable_error(monkeypatch):
@@ -43,7 +43,7 @@ def test_missing_tradingagents_has_actionable_error(monkeypatch):
     real_import = __import__
 
     def fake_import(name, *args, **kwargs):
-        if name == "tradingagents.default_config":
+        if name == "tradingagents.config":
             raise ImportError("missing")
         return real_import(name, *args, **kwargs)
 

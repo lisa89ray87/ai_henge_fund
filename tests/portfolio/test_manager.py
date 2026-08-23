@@ -1,6 +1,6 @@
 import pytest
 
-from ai_hedge_fund.portfolio.manager import PositionManager
+from ai_henge_fund.portfolio.manager import PositionManager
 
 
 def test_duplicate_position_is_blocked():

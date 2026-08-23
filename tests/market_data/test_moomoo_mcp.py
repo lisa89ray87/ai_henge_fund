@@ -68,14 +68,24 @@ def test_mcp_transport_discovers_quote_tool_and_normalizes(monkeypatch) -> None:
 
     transport = httpx.MockTransport(handler)
     original_post = httpx.post
-    monkeypatch.setattr(httpx, "post", lambda *args, **kwargs: transport.handle_request(
-        httpx.Request(kwargs.get("method", "POST"), args[0] if args else kwargs["url"], headers=kwargs.get("headers"), content=json.dumps(kwargs.get("json")).encode())
-    ))
+
+    def fake_post(url, **kwargs):
+        request = httpx.Request(
+            "POST",
+            url,
+            headers=kwargs.get("headers"),
+            content=json.dumps(kwargs.get("json")).encode(),
+        )
+        response = transport.handle_request(request)
+        response.request = request
+        return response
+
+    monkeypatch.setattr(httpx, "post", fake_post)
 
     mcp = MoomooMCPTransport(url="https://example.test/mcp", access_token="test-token")
     quote = MoomooMarketData(transport=mcp, enabled=True).get_quote("AAPL")
 
-    assert quote.symbol == "AAPL"
+    assert quote.symbol == "US.AAPL"
     assert quote.last_price == 123.45
     assert quote.volume == 1000
     assert [call["method"] for call in calls] == [

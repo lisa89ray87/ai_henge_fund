@@ -1,6 +1,6 @@
-from ai_hedge_fund.paper_trading.engine import PaperTradingEngine
-from ai_hedge_fund.paper_trading.lifecycle import PaperTradeLifecycle
-from ai_hedge_fund.portfolio.manager import PositionManager
+from ai_henge_fund.paper_trading.engine import PaperTradingEngine
+from ai_henge_fund.paper_trading.lifecycle import PaperTradeLifecycle
+from ai_henge_fund.portfolio.manager import PositionManager
 
 
 class FakeTelegram:
