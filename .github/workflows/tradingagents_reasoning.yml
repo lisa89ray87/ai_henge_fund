@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   reasoning:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
@@ -29,31 +29,35 @@ jobs:
           python-version: "3.12"
 
       - name: Install project
+        shell: powershell
         run: |
           python -m pip install --upgrade pip
           pip install -e .
 
       - name: Validate required secrets are configured
-        shell: bash
+        shell: powershell
         run: |
-          if [ -z "$DATABASE_URL" ]; then
-            echo "NEON_DATABASE_URL GitHub Actions secret is not configured for this repository."
+          if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
+            Write-Error "NEON_DATABASE_URL GitHub Actions secret is not configured for this repository."
             exit 1
-          fi
-          if [ -z "$OPENAI_API_KEY" ] && [ -z "$GEMINI_API_KEY" ]; then
-            echo "At least one AI provider secret is required: OPENAI_API_KEY or GEMINI_API_KEY."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY) -and [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) {
+            Write-Error "At least one AI provider secret is required: OPENAI_API_KEY or GEMINI_API_KEY."
             exit 1
-          fi
-          if [ -n "$OPENAI_API_KEY" ]; then
-            echo "OpenAI provider: configured (primary)."
-          else
-            echo "OpenAI provider: unavailable; Gemini will be used as primary."
-          fi
-          if [ -n "$GEMINI_API_KEY" ]; then
-            echo "Gemini provider: configured (fallback/secondary)."
-          else
-            echo "Gemini provider: not configured."
-          fi
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY)) {
+            Write-Host "OpenAI provider: configured (primary)."
+          }
+          else {
+            Write-Host "OpenAI provider: unavailable; Gemini will be used as primary."
+          }
+          if (-not [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) {
+            Write-Host "Gemini provider: configured (fallback/secondary)."
+          }
+          else {
+            Write-Host "Gemini provider: not configured."
+          }
 
       - name: Run real TradingAgents reasoning boundary
+        shell: powershell
         run: python scripts/run_tradingagents_reasoning.py
