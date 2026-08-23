@@ -1,0 +1,20 @@
+name: Moomoo OpenD Read-Only Test
+
+on:
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: [self-hosted, Windows, X64]
+
+    steps:
+      - name: Check Python
+        shell: cmd
+        run: |
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" --version
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -c "import sys; print(sys.executable)"
+
+      - name: Check Moomoo SDK
+        shell: cmd
+        run: |
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -c "import moomoo; print('Moomoo SDK: PASS')"
