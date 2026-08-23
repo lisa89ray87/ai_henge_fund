@@ -101,7 +101,7 @@ def main() -> int:
         return 1
     finally:
         pipeline.close()
-        market_data.close() if hasattr(market_data, "close") else None
+        market_data.close()
 
 
 if __name__ == "__main__":
