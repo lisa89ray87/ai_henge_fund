@@ -43,6 +43,20 @@ class MoomooCandle:
     last_close: float | None = None
     raw: Mapping[str, Any] | None = None
 
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the normalized candle for the provider-neutral snapshot."""
+        return {
+            "symbol": self.symbol,
+            "time": self.time.isoformat(),
+            "open": self.open,
+            "high": self.high,
+            "low": self.low,
+            "close": self.close,
+            "volume": self.volume,
+            "turnover": self.turnover,
+            "last_close": self.last_close,
+        }
+
 
 @dataclass(frozen=True, slots=True)
 class MoomooMarketState:
