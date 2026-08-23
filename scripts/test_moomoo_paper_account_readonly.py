@@ -8,6 +8,14 @@ HOST = "127.0.0.1"
 PORT = 11111
 
 
+def _has_us_authority(value) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (list, tuple, set)):
+        return TrdMarket.US in value or "US" in value
+    return value == TrdMarket.US or str(value).upper() == "US"
+
+
 def main() -> int:
     print("=" * 60)
     print("AI Henge Fund - Moomoo Paper Account Read-Only Test")
@@ -29,8 +37,18 @@ def main() -> int:
             return 1
 
         print("Account-list query: PASS")
+        print("Returned columns :", ", ".join(data.columns.tolist()))
+
         simulate = data[data["trd_env"] == TrdEnv.SIMULATE]
-        us = simulate[simulate["trdmarket"] == TrdMarket.US]
+        authority_col = "trdmarket_auth" if "trdmarket_auth" in data.columns else None
+        if authority_col is None:
+            print("US authority column: NOT RETURNED")
+            print("Raw account list:")
+            print(simulate.to_string(index=False))
+            print("PAPER ACCOUNT TEST: INCONCLUSIVE")
+            return 2
+
+        us = simulate[simulate[authority_col].apply(_has_us_authority)]
 
         print(f"SIMULATE accounts : {len(simulate)}")
         print(f"US SIMULATE       : {len(us)}")
@@ -42,6 +60,8 @@ def main() -> int:
 
         print("US paper account detected: NO")
         print("PAPER ACCOUNT TEST: NOT AVAILABLE")
+        print("SIMULATE accounts returned:")
+        print(simulate.to_string(index=False))
         return 2
     finally:
         ctx.close()
