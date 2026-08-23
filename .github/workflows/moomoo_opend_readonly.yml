@@ -3,11 +3,32 @@ name: Moomoo OpenD Read-Only Test
 on:
   workflow_dispatch:
 
+concurrency:
+  group: moomoo-opend-readonly
+  cancel-in-progress: false
+
+env:
+  PYTHON_EXE: 'C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe'
+
 jobs:
   verify:
     runs-on: [self-hosted, Windows, X64]
 
     steps:
-      - name: Test runner
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Check Python
         shell: cmd
-        run: echo Moomoo OpenD workflow registered successfully
+        run: |
+          "%PYTHON_EXE%" --version
+          "%PYTHON_EXE%" -c "import sys; print(sys.executable)"
+
+      - name: Check Moomoo SDK
+        shell: cmd
+        run: |
+          "%PYTHON_EXE%" -c "import moomoo; print('Moomoo SDK: PASS')"
+
+      - name: Verify Moomoo OpenD read-only market data
+        shell: cmd
+        run: "%PYTHON_EXE%" scripts/test_moomoo_my_readonly.py
