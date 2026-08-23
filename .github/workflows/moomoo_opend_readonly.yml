@@ -16,17 +16,16 @@ jobs:
         uses: actions/checkout@v5
 
       - name: Check Python
-        shell: powershell
+        shell: cmd
         run: |
           python --version
           python -c "import sys; print(sys.executable)"
 
       - name: Check Moomoo SDK
-        shell: powershell
+        shell: cmd
         run: |
           python -c "import moomoo; print('Moomoo SDK: PASS')"
 
       - name: Verify Moomoo OpenD read-only market data
-        shell: powershell
-        run: |
-          python scripts/test_moomoo_my_readonly.py
+        shell: cmd
+        run: python scripts/test_moomoo_my_readonly.py
