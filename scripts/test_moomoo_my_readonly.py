@@ -16,7 +16,8 @@ from typing import Any
 
 HOST = "127.0.0.1"
 PORT = 11111
-SYMBOL = "BMS.1155"
+# Moomoo OpenAPI uses the MY market prefix for Bursa Malaysia securities.
+SYMBOL = "MY.1155"
 
 
 def main() -> int:
@@ -39,7 +40,7 @@ def main() -> int:
 
         try:
             quote_ctx = OpenQuoteContext(host=HOST, port=PORT)
-        except Exception as exc:  # SDK raises different exceptions by version.
+        except Exception as exc:
             print("OpenD connection: FAILED")
             print(f"Reason: {exc}")
             print("Make sure Moomoo OpenD is running and logged in.")
@@ -47,7 +48,6 @@ def main() -> int:
 
         print("OpenD connection: PASS")
 
-        # get_stock_quote requires the quote subscription for this symbol.
         ret_sub, sub_message = quote_ctx.subscribe(
             [SYMBOL], [SubType.QUOTE], subscribe_push=False
         )
