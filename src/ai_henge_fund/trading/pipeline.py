@@ -48,6 +48,8 @@ class TradingPipeline:
     def _ensure_lifecycle(self) -> MoomooPaperTradeLifecycle:
         if self._lifecycle is None:
             settings = get_settings()
+            if not settings.moomoo_paper_trading_enabled:
+                raise RuntimeError("Moomoo paper trading is disabled in application settings.")
             execution = MoomooPaperExecution(
                 host=settings.moomoo_opend_host,
                 port=settings.moomoo_opend_port,
@@ -71,23 +73,25 @@ class TradingPipeline:
             self._lifecycle.close()
             self._lifecycle = None
 
-    def evaluate(self, snapshot: SignalSnapshot) -> PipelineResult:
+    def evaluate(self, snapshot: SignalSnapshot, *, execute_paper: bool = True) -> PipelineResult:
+        """Evaluate one snapshot; execute paper orders only when explicitly enabled."""
         signal = self.signal_engine.evaluate(snapshot)
         ai = self.ai_adapter.analyze(snapshot, signal)
         risk = self.risk_gate.evaluate(snapshot, signal, ai)
 
         lifecycle = None
-        if risk.action == "BUY" and risk.quantity > 0 and self.positions.get(snapshot.symbol) is None:
-            lifecycle = self._ensure_lifecycle().open(
-                symbol=snapshot.symbol,
-                side="BUY",
-                quantity=risk.quantity,
-                price=float(snapshot.last_price),
-            )
-        elif risk.action == "SELL" and risk.quantity > 0 and self.positions.get(snapshot.symbol) is not None:
-            lifecycle = self._ensure_lifecycle().close_position(
-                symbol=snapshot.symbol,
-                price=float(snapshot.last_price),
-            )
+        if execute_paper:
+            if risk.action == "BUY" and risk.quantity > 0 and self.positions.get(snapshot.symbol) is None:
+                lifecycle = self._ensure_lifecycle().open(
+                    symbol=snapshot.symbol,
+                    side="BUY",
+                    quantity=risk.quantity,
+                    price=float(snapshot.last_price),
+                )
+            elif risk.action == "SELL" and risk.quantity > 0 and self.positions.get(snapshot.symbol) is not None:
+                lifecycle = self._ensure_lifecycle().close_position(
+                    symbol=snapshot.symbol,
+                    price=float(snapshot.last_price),
+                )
 
         return PipelineResult(signal.direction, ai.decision, risk, lifecycle)
