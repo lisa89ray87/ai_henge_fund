@@ -9,7 +9,7 @@ concurrency:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, Windows, X64]
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       MOOMOO_MCP_ENABLED: "true"
@@ -29,18 +29,20 @@ jobs:
           python-version: "3.12"
 
       - name: Install project
+        shell: powershell
         run: |
           python -m pip install --upgrade pip
           pip install -e .
 
       - name: Validate Moomoo MCP secret
-        shell: bash
+        shell: powershell
         run: |
-          if [ -z "$MOOMOO_MCP_ACCESS_TOKEN" ]; then
-            echo "MOOMOO_MCP_ACCESS_TOKEN GitHub Actions secret is not configured."
-            echo "Complete Moomoo MCP OAuth in a supported MCP client, then store the access token as this repository secret."
+          if ([string]::IsNullOrWhiteSpace($env:MOOMOO_MCP_ACCESS_TOKEN)) {
+            Write-Error "MOOMOO_MCP_ACCESS_TOKEN GitHub Actions secret is not configured."
+            Write-Host "Complete Moomoo MCP OAuth in a supported MCP client, then store the access token as this repository secret."
             exit 1
-          fi
+          }
 
       - name: Verify read-only Moomoo MCP quote
+        shell: powershell
         run: python scripts/verify_moomoo_mcp_readonly.py
