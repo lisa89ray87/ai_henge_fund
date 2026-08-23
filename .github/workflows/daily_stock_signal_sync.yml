@@ -20,16 +20,16 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+      - name: Check Python
+        shell: cmd
+        run: |
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" --version
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -c "import sys; print(sys.executable)"
 
       - name: Install project
-        shell: powershell
+        shell: cmd
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -m pip install -e .
 
       - name: Validate required secret is configured
         shell: powershell
@@ -40,9 +40,11 @@ jobs:
           }
 
       - name: Import latest daily_stock_analyse signals
-        shell: powershell
-        run: python scripts/sync_daily_stock_signals.py
+        shell: cmd
+        run: |
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" scripts/sync_daily_stock_signals.py
 
       - name: Verify bridge idempotency
-        shell: powershell
-        run: python scripts/verify_daily_stock_signal_sync.py
+        shell: cmd
+        run: |
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" scripts/verify_daily_stock_signal_sync.py
