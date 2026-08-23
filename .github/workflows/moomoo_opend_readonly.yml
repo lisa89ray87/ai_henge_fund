@@ -7,6 +7,9 @@ concurrency:
   group: moomoo-opend-readonly
   cancel-in-progress: false
 
+env:
+  PYTHON_EXE: 'C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe'
+
 jobs:
   verify:
     runs-on: [self-hosted, Windows, X64]
@@ -18,14 +21,14 @@ jobs:
       - name: Check Python
         shell: cmd
         run: |
-          python --version
-          python -c "import sys; print(sys.executable)"
+          "%PYTHON_EXE%" --version
+          "%PYTHON_EXE%" -c "import sys; print(sys.executable)"
 
       - name: Check Moomoo SDK
         shell: cmd
         run: |
-          python -c "import moomoo; print('Moomoo SDK: PASS')"
+          "%PYTHON_EXE%" -c "import moomoo; print('Moomoo SDK: PASS')"
 
       - name: Verify Moomoo OpenD read-only market data
         shell: cmd
-        run: python scripts/test_moomoo_my_readonly.py
+        run: "%PYTHON_EXE%" scripts/test_moomoo_my_readonly.py
