@@ -93,6 +93,14 @@ class MoomooMarketData:
         assert self._transport is not None
         return self._transport
 
+    def close(self) -> None:
+        """Close an underlying transport when it supports explicit cleanup."""
+        transport = self._transport
+        if transport is not None and hasattr(transport, "close"):
+            transport.close()  # type: ignore[attr-defined]
+        self._transport = None
+        self._enabled = False
+
     @staticmethod
     def _symbol(symbol: str) -> str:
         normalized = symbol.strip().upper()
