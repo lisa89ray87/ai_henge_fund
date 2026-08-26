@@ -96,7 +96,7 @@ class TradingAgentsGraphRuntime:
         if self._has_key("OPENAI_API_KEY"):
             self._primary_provider = "openai"
         elif self._has_gemini_key():
-            self._primary_provider = "google"
+            self._primary_provider = "google_genai"
         else:
             raise RuntimeError(
                 "No AI provider is configured. Set OPENAI_API_KEY and/or GEMINI_API_KEY."
@@ -127,7 +127,7 @@ class TradingAgentsGraphRuntime:
             "max_recur_limit": 25,
         }
 
-        if provider == "google":
+        if provider == "google_genai":
             self._prepare_google_key()
             config["deep_think_llm"] = os.getenv(
                 "GEMINI_DEEP_THINK_LLM", "gemini-2.5-pro"
@@ -209,4 +209,4 @@ class TradingAgentsGraphRuntime:
                 "OpenAI provider failed with a provider-level error; "
                 "retrying this analysis with Gemini."
             )
-            return self._run("google", request)
+            return self._run("google_genai", request)
