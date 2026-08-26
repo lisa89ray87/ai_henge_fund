@@ -2,34 +2,6 @@ name: Moomoo Signal Pipeline
 
 on:
   workflow_dispatch:
-    inputs:
-      symbol:
-        description: "US stock symbol, for example US.AAPL"
-        required: true
-        default: "US.AAPL"
-        type: string
-      candles:
-        description: "Number of candles to load"
-        required: true
-        default: "50"
-        type: string
-      interval:
-        description: "Candle interval"
-        required: true
-        default: "5m"
-        type: choice
-        options:
-          - "1m"
-          - "5m"
-          - "15m"
-          - "30m"
-          - "60m"
-          - "1d"
-      execute_paper:
-        description: "Explicitly enable Moomoo SIMULATE paper execution"
-        required: true
-        default: false
-        type: boolean
   push:
     paths:
       - ".github/paper_trade_kickstart"
@@ -51,10 +23,10 @@ jobs:
       MOOMOO_READ_ONLY: "true"
       MOOMOO_OPEND_HOST: "127.0.0.1"
       MOOMOO_OPEND_PORT: "11111"
-      MOOMOO_SIGNAL_SYMBOL: ${{ github.event_name == 'workflow_dispatch' && inputs.symbol || 'US.AAPL' }}
-      MOOMOO_SIGNAL_CANDLES: ${{ github.event_name == 'workflow_dispatch' && inputs.candles || '50' }}
-      MOOMOO_SIGNAL_INTERVAL: ${{ github.event_name == 'workflow_dispatch' && inputs.interval || '5m' }}
-      EXECUTE_PAPER: ${{ github.event_name == 'workflow_dispatch' && inputs.execute_paper || contains(github.event.head_commit.message, '[paper-trade]') }}
+      MOOMOO_SIGNAL_SYMBOL: "US.AAPL"
+      MOOMOO_SIGNAL_CANDLES: "50"
+      MOOMOO_SIGNAL_INTERVAL: "5m"
+      EXECUTE_PAPER: "true"
       MOOMOO_PAPER_TRADING_ENABLED: "true"
       MOOMOO_LIVE_TRADING_ENABLED: "false"
       TRADINGAGENTS_LLM_MAX_RETRIES: "1"
@@ -100,7 +72,7 @@ jobs:
           )
           echo Required secrets are configured.
 
-      - name: Verify OpenD and run signal pipeline
+      - name: Run Moomoo OpenD paper pipeline
         shell: cmd
         run: |
           echo MOOMOO_SIGNAL_SYMBOL=%MOOMOO_SIGNAL_SYMBOL%
