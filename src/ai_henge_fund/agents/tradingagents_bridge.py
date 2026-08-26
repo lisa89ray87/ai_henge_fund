@@ -8,6 +8,7 @@ place orders or connect to a broker.
 
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass
 from datetime import datetime
@@ -106,9 +107,6 @@ class TradingAgentsGraphRuntime:
         if provider in self._graphs:
             return self._graphs[provider]
 
-        # TradingAgents requires max_recur_limit >= 25. The current workflow
-        # reached that limit before the graph's stop condition, so use a higher
-        # ceiling while keeping the value explicit and bounded.
         config: dict[str, Any] = {
             "llm_provider": provider,
             "max_debate_rounds": 1,
@@ -162,6 +160,64 @@ class TradingAgentsGraphRuntime:
             return normalized[3:]
         return normalized
 
+    @staticmethod
+    def _normalize_decision(raw_decision: Any, symbol: str) -> tuple[str, float | None, str]:
+        """Normalize current TradingAgents dict or string decision formats.
+
+        Newer/older TradingAgents releases can return the final decision as a
+        dictionary or as a JSON/plain string. We accept both, but never invent
+        confidence: a missing confidence remains None so the downstream risk
+        gate can fail closed.
+        """
+        value = raw_decision
+        if isinstance(value, str):
+            text = value.strip()
+            try:
+                value = json.loads(text)
+            except json.JSONDecodeError:
+                action = text.upper()
+                if action in {"BUY", "SELL", "HOLD", "WAIT"}:
+                    return action, None, f"TradingAgents returned {action} without confidence."
+                raise RuntimeError(
+                    f"TradingAgents returned an unsupported decision string for {symbol}: {text[:200]}"
+                )
+
+        if not isinstance(value, dict):
+            raise RuntimeError(
+                f"TradingAgents returned an unexpected decision type for {symbol}: "
+                f"{type(raw_decision).__name__}"
+            )
+
+        action = str(
+            value.get("action")
+            or value.get("decision")
+            or value.get("recommendation")
+            or "hold"
+        ).strip().upper()
+        if action in {"HOLD", "WAIT", "NEUTRAL"}:
+            action = "HOLD"
+        elif action in {"BUY", "LONG"}:
+            action = "BUY"
+        elif action in {"SELL", "SHORT"}:
+            action = "SELL"
+        else:
+            raise RuntimeError(
+                f"TradingAgents returned unsupported action for {symbol}: {action!r}"
+            )
+
+        confidence_value = value.get("confidence")
+        confidence = float(confidence_value) if confidence_value is not None else None
+        rationale = str(
+            value.get("reasoning")
+            or value.get("rationale")
+            or value.get("analysis")
+            or ""
+        ).strip()
+        if not rationale:
+            rationale = f"TradingAgents decision: {action}"
+
+        return action, confidence, rationale
+
     def _run(self, provider: str, request: dict[str, Any]) -> TradingAgentsDecision:
         symbol = str(request["symbol"]).strip().upper()
         tradingagents_symbol = self._normalize_tradingagents_symbol(symbol)
@@ -171,21 +227,10 @@ class TradingAgentsGraphRuntime:
         else:
             analysis_date = datetime.now().date().isoformat()
 
-        _, decision = self._build_graph(provider).propagate(
+        _, raw_decision = self._build_graph(provider).propagate(
             tradingagents_symbol, analysis_date
         )
-        if not isinstance(decision, dict):
-            raise RuntimeError(
-                f"TradingAgents returned an unexpected decision type for {symbol}: "
-                f"{type(decision).__name__}"
-            )
-
-        action = str(decision.get("action", "hold")).lower()
-        confidence_value = decision.get("confidence")
-        confidence = float(confidence_value) if confidence_value is not None else None
-        rationale = str(decision.get("reasoning") or decision.get("rationale") or "")
-        if not rationale:
-            raise RuntimeError(f"TradingAgents returned no reasoning for {symbol}.")
+        action, confidence, rationale = self._normalize_decision(raw_decision, symbol)
 
         return TradingAgentsDecision(
             action=action,
