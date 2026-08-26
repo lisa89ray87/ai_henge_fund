@@ -30,6 +30,9 @@ on:
         required: true
         default: false
         type: boolean
+  push:
+    paths:
+      - ".github/paper_trade_kickstart"
 
 concurrency:
   group: moomoo-signal-pipeline
@@ -48,10 +51,10 @@ jobs:
       MOOMOO_READ_ONLY: "true"
       MOOMOO_OPEND_HOST: "127.0.0.1"
       MOOMOO_OPEND_PORT: "11111"
-      MOOMOO_SIGNAL_SYMBOL: ${{ inputs.symbol }}
-      MOOMOO_SIGNAL_CANDLES: ${{ inputs.candles }}
-      MOOMOO_SIGNAL_INTERVAL: ${{ inputs.interval }}
-      EXECUTE_PAPER: ${{ inputs.execute_paper }}
+      MOOMOO_SIGNAL_SYMBOL: ${{ github.event_name == 'workflow_dispatch' && inputs.symbol || 'US.AAPL' }}
+      MOOMOO_SIGNAL_CANDLES: ${{ github.event_name == 'workflow_dispatch' && inputs.candles || '50' }}
+      MOOMOO_SIGNAL_INTERVAL: ${{ github.event_name == 'workflow_dispatch' && inputs.interval || '5m' }}
+      EXECUTE_PAPER: ${{ github.event_name == 'workflow_dispatch' && inputs.execute_paper || contains(github.event.head_commit.message, '[paper-trade]') }}
       MOOMOO_PAPER_TRADING_ENABLED: "true"
       MOOMOO_LIVE_TRADING_ENABLED: "false"
       TRADINGAGENTS_LLM_MAX_RETRIES: "1"
@@ -99,4 +102,11 @@ jobs:
 
       - name: Verify OpenD and run signal pipeline
         shell: cmd
-        run: "%PYTHON_ROOT%\python.exe" scripts/run_moomoo_signal_pipeline.py
+        run: |
+          echo MOOMOO_SIGNAL_SYMBOL=%MOOMOO_SIGNAL_SYMBOL%
+          echo MOOMOO_SIGNAL_CANDLES=%MOOMOO_SIGNAL_CANDLES%
+          echo MOOMOO_SIGNAL_INTERVAL=%MOOMOO_SIGNAL_INTERVAL%
+          echo EXECUTE_PAPER=%EXECUTE_PAPER%
+          echo MOOMOO_PAPER_TRADING_ENABLED=%MOOMOO_PAPER_TRADING_ENABLED%
+          echo MOOMOO_LIVE_TRADING_ENABLED=%MOOMOO_LIVE_TRADING_ENABLED%
+          "%PYTHON_ROOT%\python.exe" scripts/run_moomoo_signal_pipeline.py
