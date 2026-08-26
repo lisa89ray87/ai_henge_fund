@@ -165,15 +165,31 @@ class TradingAgentsGraphRuntime:
         )
         return any(marker in message for marker in markers)
 
+    @staticmethod
+    def _normalize_tradingagents_symbol(symbol: str) -> str:
+        """Convert broker/exchange-qualified symbols to TradingAgents ticker format.
+
+        Moomoo uses symbols such as ``US.AAPL``. TradingAgents' Yahoo-based
+        market-data tools expect the bare ticker ``AAPL`` for US equities.
+        Keep the original Moomoo symbol everywhere outside this research call.
+        """
+        normalized = symbol.strip().upper()
+        if normalized.startswith("US."):
+            return normalized[3:]
+        return normalized
+
     def _run(self, provider: str, request: dict[str, Any]) -> TradingAgentsDecision:
         symbol = str(request["symbol"]).strip().upper()
+        tradingagents_symbol = self._normalize_tradingagents_symbol(symbol)
         generated_at = request.get("generated_at")
         if generated_at:
             analysis_date = datetime.fromisoformat(str(generated_at)).date().isoformat()
         else:
             analysis_date = datetime.now().date().isoformat()
 
-        _, decision = self._build_graph(provider).propagate(symbol, analysis_date)
+        _, decision = self._build_graph(provider).propagate(
+            tradingagents_symbol, analysis_date
+        )
         if not isinstance(decision, dict):
             raise RuntimeError(
                 f"TradingAgents returned an unexpected decision type for {symbol}: "
