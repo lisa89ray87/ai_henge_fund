@@ -43,6 +43,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      PYTHON_ROOT: "C:\Users\limli\AppData\Local\Programs\Python\Python312"
       MOOMOO_OPEND_ENABLED: "true"
       MOOMOO_READ_ONLY: "true"
       MOOMOO_OPEND_HOST: "127.0.0.1"
@@ -61,30 +62,41 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Verify preinstalled Python
+      - name: Verify self-hosted runner and Python
         shell: cmd
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" --version
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -c "import sys; print(sys.executable)"
+          echo Runner identity:
+          whoami
+          echo USERPROFILE=%USERPROFILE%
+          echo PYTHON_ROOT=%PYTHON_ROOT%
+          if not exist "%PYTHON_ROOT%\python.exe" (
+            echo ERROR: Python 3.12 was not found at %PYTHON_ROOT%\python.exe
+            exit /b 1
+          )
+          echo Python executable found.
+          echo %PYTHON_ROOT%>>"%GITHUB_PATH%"
+          echo %PYTHON_ROOT%\Scripts>>"%GITHUB_PATH%"
+          "%PYTHON_ROOT%\python.exe" --version
+          "%PYTHON_ROOT%\python.exe" -c "import sys; print(sys.executable)"
 
       - name: Install project
         shell: cmd
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -m pip install --upgrade pip
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -m pip install -e .
+          "%PYTHON_ROOT%\python.exe" -m pip install --disable-pip-version-check -e .
 
       - name: Validate required secrets
-        shell: powershell
+        shell: cmd
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
-            Write-Error "NEON_DATABASE_URL is not configured."
-            exit 1
-          }
-          if ([string]::IsNullOrWhiteSpace($env:OPENAI_API_KEY) -and [string]::IsNullOrWhiteSpace($env:GEMINI_API_KEY)) {
-            Write-Error "OPENAI_API_KEY or GEMINI_API_KEY is required."
-            exit 1
-          }
+          if "%DATABASE_URL%"=="" (
+            echo ERROR: NEON_DATABASE_URL is not configured.
+            exit /b 1
+          )
+          if "%OPENAI_API_KEY%"=="" if "%GEMINI_API_KEY%"=="" (
+            echo ERROR: OPENAI_API_KEY or GEMINI_API_KEY is required.
+            exit /b 1
+          )
+          echo Required secrets are configured.
 
       - name: Verify OpenD and run signal pipeline
         shell: cmd
-        run: "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" scripts/run_moomoo_signal_pipeline.py
+        run: "%PYTHON_ROOT%\python.exe" scripts/run_moomoo_signal_pipeline.py
