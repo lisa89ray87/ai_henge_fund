@@ -70,15 +70,7 @@ class TradingAgentsBridge:
 
 
 class TradingAgentsGraphRuntime:
-    """Production adapter around TauricResearch TradingAgentsGraph.
-
-    We intentionally do not import ``DEFAULT_CONFIG`` here. Some packaged
-    TradingAgents builds expose the graph but do not expose that convenience
-    constant at the package root. The graph accepts a normal configuration
-    dictionary, so using an explicit minimal configuration keeps this adapter
-    compatible with the installed package while still allowing environment
-    overrides.
-    """
+    """Production adapter around TauricResearch TradingAgentsGraph."""
 
     def __init__(self) -> None:
         try:
@@ -130,10 +122,10 @@ class TradingAgentsGraphRuntime:
         if provider == "google_genai":
             self._prepare_google_key()
             config["deep_think_llm"] = os.getenv(
-                "GEMINI_DEEP_THINK_LLM", "gemini-3.6-flash"
+                "GEMINI_DEEP_THINK_LLM", "gemini-3.1-flash-lite"
             )
             config["quick_think_llm"] = os.getenv(
-                "GEMINI_QUICK_THINK_LLM", "gemini-3.6-flash"
+                "GEMINI_QUICK_THINK_LLM", "gemini-3.1-flash-lite"
             )
         else:
             config["deep_think_llm"] = os.getenv(
@@ -167,12 +159,7 @@ class TradingAgentsGraphRuntime:
 
     @staticmethod
     def _normalize_tradingagents_symbol(symbol: str) -> str:
-        """Convert broker/exchange-qualified symbols to TradingAgents ticker format.
-
-        Moomoo uses symbols such as ``US.AAPL``. TradingAgents' Yahoo-based
-        market-data tools expect the bare ticker ``AAPL`` for US equities.
-        Keep the original Moomoo symbol everywhere outside this research call.
-        """
+        """Convert broker/exchange-qualified symbols to TradingAgents ticker format."""
         normalized = symbol.strip().upper()
         if normalized.startswith("US."):
             return normalized[3:]
