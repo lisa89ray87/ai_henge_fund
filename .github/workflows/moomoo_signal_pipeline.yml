@@ -18,7 +18,7 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
-      PYTHON_ROOT: "C:\Users\limli\AppData\Local\Programs\Python\Python312"
+      PYTHON_ROOT: 'C:\Users\limli\AppData\Local\Programs\Python\Python312'
       MOOMOO_OPEND_ENABLED: "true"
       MOOMOO_READ_ONLY: "true"
       MOOMOO_OPEND_HOST: "127.0.0.1"
