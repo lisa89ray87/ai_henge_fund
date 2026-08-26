@@ -124,7 +124,7 @@ class TradingAgentsGraphRuntime:
             "llm_provider": provider,
             "max_debate_rounds": 1,
             "max_risk_discuss_rounds": 1,
-            "max_recur_limit": 1,
+            "max_recur_limit": 25,
         }
 
         if provider == "google":
