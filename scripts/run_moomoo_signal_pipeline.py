@@ -93,7 +93,8 @@ def main() -> int:
             except Exception as exc:
                 print(f"SCAN {symbol}: SKIP ({exc})")
 
-        snapshots.sort(key=lambda item: item[1].score, reverse=True)
+        # Rank both long and short setups by absolute signal strength.
+        snapshots.sort(key=lambda item: abs(item[1].score), reverse=True)
         candidates = snapshots[:max_ai_candidates]
         print(f"AI analysis      : {len(candidates)} candidate(s)")
 
