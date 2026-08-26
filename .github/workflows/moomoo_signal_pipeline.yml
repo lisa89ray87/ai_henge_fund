@@ -27,6 +27,8 @@ jobs:
       MOOMOO_SIGNAL_INTERVAL: "5m"
       MOOMOO_SIGNAL_MAX_AI_CANDIDATES: "5"
       MOOMOO_SIGNAL_MAX_PAPER_TRADES: "1"
+      MOOMOO_SIGNAL_CYCLE_MINUTES: "20"
+      SESSION_RUN_UNTIL_CLOSE: "true"
       EXECUTE_PAPER: "true"
       MOOMOO_PAPER_TRADING_ENABLED: "true"
       MOOMOO_LIVE_TRADING_ENABLED: "false"
@@ -73,7 +75,7 @@ jobs:
           )
           echo Required secrets are configured.
 
-      - name: Run Moomoo OpenD universe paper pipeline
+      - name: Run Moomoo OpenD universe paper pipeline for full regular session
         shell: cmd
         run: |
           echo MOOMOO_SIGNAL_UNIVERSE=default configured universe
@@ -81,6 +83,8 @@ jobs:
           echo MOOMOO_SIGNAL_INTERVAL=%MOOMOO_SIGNAL_INTERVAL%
           echo MOOMOO_SIGNAL_MAX_AI_CANDIDATES=%MOOMOO_SIGNAL_MAX_AI_CANDIDATES%
           echo MOOMOO_SIGNAL_MAX_PAPER_TRADES=%MOOMOO_SIGNAL_MAX_PAPER_TRADES%
+          echo MOOMOO_SIGNAL_CYCLE_MINUTES=%MOOMOO_SIGNAL_CYCLE_MINUTES%
+          echo SESSION_RUN_UNTIL_CLOSE=%SESSION_RUN_UNTIL_CLOSE%
           echo EXECUTE_PAPER=%EXECUTE_PAPER%
           echo MOOMOO_PAPER_TRADING_ENABLED=%MOOMOO_PAPER_TRADING_ENABLED%
           echo MOOMOO_LIVE_TRADING_ENABLED=%MOOMOO_LIVE_TRADING_ENABLED%
