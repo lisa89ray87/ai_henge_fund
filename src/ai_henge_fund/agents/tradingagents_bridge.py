@@ -4,12 +4,6 @@ The daily_stock_analyse engine remains the source of truth for imported
 signals. TradingAgents is used as a read-only reasoning layer: it analyzes the
 symbol/date and returns an independent research decision. This module does not
 place orders or connect to a broker.
-
-LLM provider behavior is deliberately resilient:
-- OpenAI is preferred when its key is available.
-- Gemini/Google is used automatically when OpenAI is unavailable.
-- If an OpenAI call fails with a quota/rate-limit/authentication style error,
-  the same analysis is retried once with Gemini when its key is available.
 """
 
 from __future__ import annotations
@@ -79,7 +73,7 @@ class TradingAgentsGraphRuntime:
             raise RuntimeError(
                 "The installed TradingAgents package does not expose "
                 "tradingagents.graph.trading_graph.TradingAgentsGraph. "
-                "Verify that tradingagents>=0.3.1,<0.4.0 is installed."
+                "Verify that the configured TradingAgents version is installed."
             ) from exc
 
         self._graph_cls = TradingAgentsGraph
@@ -112,11 +106,14 @@ class TradingAgentsGraphRuntime:
         if provider in self._graphs:
             return self._graphs[provider]
 
+        # TradingAgents requires max_recur_limit >= 25. The current workflow
+        # reached that limit before the graph's stop condition, so use a higher
+        # ceiling while keeping the value explicit and bounded.
         config: dict[str, Any] = {
             "llm_provider": provider,
             "max_debate_rounds": 1,
             "max_risk_discuss_rounds": 1,
-            "max_recur_limit": 25,
+            "max_recur_limit": 100,
         }
 
         if provider == "google_genai":
