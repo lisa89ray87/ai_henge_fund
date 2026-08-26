@@ -23,9 +23,10 @@ jobs:
       MOOMOO_READ_ONLY: "true"
       MOOMOO_OPEND_HOST: "127.0.0.1"
       MOOMOO_OPEND_PORT: "11111"
-      MOOMOO_SIGNAL_SYMBOL: "US.AAPL"
       MOOMOO_SIGNAL_CANDLES: "50"
       MOOMOO_SIGNAL_INTERVAL: "5m"
+      MOOMOO_SIGNAL_MAX_AI_CANDIDATES: "5"
+      MOOMOO_SIGNAL_MAX_PAPER_TRADES: "1"
       EXECUTE_PAPER: "true"
       MOOMOO_PAPER_TRADING_ENABLED: "true"
       MOOMOO_LIVE_TRADING_ENABLED: "false"
@@ -72,12 +73,14 @@ jobs:
           )
           echo Required secrets are configured.
 
-      - name: Run Moomoo OpenD paper pipeline
+      - name: Run Moomoo OpenD universe paper pipeline
         shell: cmd
         run: |
-          echo MOOMOO_SIGNAL_SYMBOL=%MOOMOO_SIGNAL_SYMBOL%
+          echo MOOMOO_SIGNAL_UNIVERSE=default configured universe
           echo MOOMOO_SIGNAL_CANDLES=%MOOMOO_SIGNAL_CANDLES%
           echo MOOMOO_SIGNAL_INTERVAL=%MOOMOO_SIGNAL_INTERVAL%
+          echo MOOMOO_SIGNAL_MAX_AI_CANDIDATES=%MOOMOO_SIGNAL_MAX_AI_CANDIDATES%
+          echo MOOMOO_SIGNAL_MAX_PAPER_TRADES=%MOOMOO_SIGNAL_MAX_PAPER_TRADES%
           echo EXECUTE_PAPER=%EXECUTE_PAPER%
           echo MOOMOO_PAPER_TRADING_ENABLED=%MOOMOO_PAPER_TRADING_ENABLED%
           echo MOOMOO_LIVE_TRADING_ENABLED=%MOOMOO_LIVE_TRADING_ENABLED%
