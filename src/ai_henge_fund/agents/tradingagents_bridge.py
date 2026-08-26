@@ -130,10 +130,10 @@ class TradingAgentsGraphRuntime:
         if provider == "google_genai":
             self._prepare_google_key()
             config["deep_think_llm"] = os.getenv(
-                "GEMINI_DEEP_THINK_LLM", "gemini-2.5-pro"
+                "GEMINI_DEEP_THINK_LLM", "gemini-3.6-pro"
             )
             config["quick_think_llm"] = os.getenv(
-                "GEMINI_QUICK_THINK_LLM", "gemini-2.5-flash"
+                "GEMINI_QUICK_THINK_LLM", "gemini-3.6-flash"
             )
         else:
             config["deep_think_llm"] = os.getenv(
