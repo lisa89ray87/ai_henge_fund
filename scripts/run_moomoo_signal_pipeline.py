@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import os
 import time
-from datetime import datetime, time as dt_time
+from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from ai_henge_fund.agents.tradingagents_bridge import TradingAgentsGraphRuntime
@@ -66,10 +66,6 @@ def _session_close(now: datetime) -> datetime:
     return now.replace(hour=16, minute=0, second=0, microsecond=0)
 
 
-def _regular_session_active(now: datetime) -> bool:
-    return now.weekday() < 5 and _session_open(now) <= now < _session_close(now)
-
-
 def _run_cycle(
     market_data,
     pipeline: TradingPipeline,
@@ -109,7 +105,12 @@ def _run_cycle(
     analyzed = 0
     for snapshot, _signal in candidates:
         analyzed += 1
-        result = pipeline.evaluate(snapshot, execute_paper=execute_paper)
+        try:
+            result = pipeline.evaluate(snapshot, execute_paper=execute_paper)
+        except Exception as exc:
+            print(f"AI/PIPELINE {snapshot.symbol}: SKIP ({exc})")
+            continue
+
         print(
             f"RESULT {snapshot.symbol}: deterministic={result.deterministic_direction} "
             f"ai={result.ai_decision} risk={result.risk.action} qty={result.risk.quantity:g}"
