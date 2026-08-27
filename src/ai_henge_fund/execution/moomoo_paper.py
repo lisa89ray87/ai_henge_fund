@@ -42,16 +42,30 @@ class MoomooPaperExecution:
     def close(self) -> None:
         self._ctx.close()
 
-    def place_limit(
-        self,
-        *,
-        symbol: str,
-        side: str,
-        quantity: int,
-        price: float,
-    ) -> MoomooPaperOrder:
-        if quantity <= 0 or price <= 0:
-            raise ValueError("quantity and price must be greater than zero")
+    def place_limit(self, *, symbol: str, side: str, quantity: int, price: float) -> MoomooPaperOrder:
+        return self._place(symbol=symbol, side=side, quantity=quantity, price=price, order_type=OrderType.NORMAL)
+
+    def place_market(self, *, symbol: str, side: str, quantity: int) -> MoomooPaperOrder:
+        return self._place(symbol=symbol, side=side, quantity=quantity, price=0.0, order_type=OrderType.MARKET)
+
+    def cancel(self, order_id: str) -> None:
+        from moomoo import ModifyOrderOp
+
+        ret, data = self._ctx.modify_order(
+            ModifyOrderOp.CANCEL,
+            str(order_id),
+            0,
+            0,
+            trd_env=TrdEnv.SIMULATE,
+        )
+        if ret != 0:
+            raise RuntimeError(f"Moomoo paper order cancellation failed: {data}")
+
+    def _place(self, *, symbol: str, side: str, quantity: int, price: float, order_type) -> MoomooPaperOrder:
+        if quantity <= 0:
+            raise ValueError("quantity must be greater than zero")
+        if order_type == OrderType.NORMAL and price <= 0:
+            raise ValueError("limit order price must be greater than zero")
         side = side.upper()
         if side not in {"BUY", "SELL"}:
             raise ValueError("side must be BUY or SELL")
@@ -65,7 +79,7 @@ class MoomooPaperExecution:
             qty=int(quantity),
             code=symbol,
             trd_side=trd_side,
-            order_type=OrderType.NORMAL,
+            order_type=order_type,
             trd_env=TrdEnv.SIMULATE,
         )
         if ret != 0:
@@ -76,12 +90,4 @@ class MoomooPaperExecution:
         if not order_id:
             raise RuntimeError("Moomoo accepted the order but returned no order_id")
         status = str(row.get("order_status", "SUBMITTING")).upper()
-        return MoomooPaperOrder(
-            order_id,
-            symbol,
-            side,
-            float(quantity),
-            float(price),
-            status,
-            data,
-        )
+        return MoomooPaperOrder(order_id, symbol, side, float(quantity), float(price), status, data)
