@@ -12,6 +12,7 @@ from ai_henge_fund.execution.moomoo_order_monitor import FILLED_ALL, MoomooPaper
 from ai_henge_fund.execution.moomoo_paper import MoomooPaperExecution
 from ai_henge_fund.paper_trading.engine import PaperTrade
 from ai_henge_fund.portfolio.manager import PositionManager
+from ai_henge_fund.portfolio.persistent_trade_state import PersistentTradeStateStore
 
 
 @dataclass(frozen=True)
@@ -27,12 +28,7 @@ class MoomooLifecycleResult:
 
 
 class MoomooPaperTradeLifecycle:
-    """Execute the strategy lifecycle through Moomoo US SIMULATE only.
-
-    Moomoo SIMULATE supports limit/market orders, not native stop orders.
-    The target is therefore a real resting limit order and the stop is
-    enforced by a client-side price watcher which submits a market exit.
-    """
+    """Execute and resume the strategy lifecycle through Moomoo US SIMULATE only."""
 
     def __init__(self, execution, monitor, positions, telegram=None, *, fill_timeout_seconds=30, exit_poll_seconds=2.0):
         self.execution = execution
@@ -42,7 +38,9 @@ class MoomooPaperTradeLifecycle:
         self.fill_timeout_seconds = fill_timeout_seconds
         self.exit_poll_seconds = exit_poll_seconds
         self._watchers: dict[str, tuple[Event, Thread]] = {}
+        self._target_orders: dict[str, str] = {}
         self._quote = OpenQuoteContext(host="127.0.0.1", port=11111)
+        self._state = PersistentTradeStateStore()
 
     def close(self) -> None:
         for stop_event, _thread in list(self._watchers.values()):
@@ -51,6 +49,91 @@ class MoomooPaperTradeLifecycle:
         self._quote.close()
         self.execution.close()
         self.monitor.close()
+
+    def reconcile_startup(self) -> int:
+        """Rebuild in-memory positions from Moomoo and persistent trade history."""
+        broker_positions = self.execution.list_positions()
+        broker_by_symbol = {row["symbol"]: row for row in broker_positions}
+        working_orders = self.execution.list_open_orders()
+        open_states = {state.symbol: state for state in self._state.open_states()}
+
+        for row in broker_positions:
+            symbol = row["symbol"]
+            state = open_states.get(symbol)
+            if state is None:
+                self.positions.restore(symbol, row["quantity"], row["average_price"])
+                print(f"RECONCILE {symbol}: broker position found without saved trade state")
+                self._notify_text(
+                    f"⚠️ POSITION RECONCILIATION\n{symbol}: existing Moomoo paper position found, "
+                    "but AI Henge Fund has no saved entry/target/stop history. Manual review required."
+                )
+                continue
+
+            signed_qty = abs(row["quantity"]) if state.side == "BUY" else -abs(row["quantity"])
+            self.positions.restore(
+                symbol, signed_qty, row["average_price"],
+                stop_price=state.stop_price, target_price=state.target_price,
+            )
+            print(
+                f"RECONCILE {symbol}: {state.side} qty={abs(signed_qty):g} "
+                f"entry=${row['average_price']:,.4f} target={state.target_price} stop={state.stop_price}"
+            )
+
+            target_order_id = None
+            if state.target_price and not self._has_matching_exit_order(working_orders, symbol, state.target_price, state.side):
+                target_side = "SELL" if signed_qty > 0 else "BUY"
+                order = self.execution.place_limit(
+                    symbol=symbol, side=target_side, quantity=int(abs(signed_qty)), price=state.target_price
+                )
+                target_order_id = order.order_id
+                self._target_orders[symbol] = target_order_id
+                print(f"RECONCILE {symbol}: target order restored {order.order_id} @ ${state.target_price:,.4f}")
+            else:
+                target_order_id = self._matching_exit_order_id(working_orders, symbol, state.target_price, state.side)
+                if target_order_id:
+                    self._target_orders[symbol] = target_order_id
+
+            if state.stop_price and not self._has_any_exit_order(working_orders, symbol, state.side):
+                self._start_exit_watcher(
+                    symbol, "BUY" if signed_qty > 0 else "SELL", int(abs(signed_qty)),
+                    state.stop_price, target_order_id,
+                )
+                print(f"RECONCILE {symbol}: stop watcher restored @ ${state.stop_price:,.4f}")
+
+        for symbol in open_states:
+            if symbol not in broker_by_symbol:
+                self._state.mark_closed(symbol)
+                print(f"RECONCILE {symbol}: saved position is no longer present in Moomoo; marked CLOSED")
+
+        count = len(broker_positions)
+        self._notify_text(
+            f"🔄 SESSION RESUMED\nExisting paper positions: {count}\n"
+            f"Saved trade states checked: {len(open_states)}\n"
+            "Moomoo is the position source of truth; unmatched positions require manual review."
+        )
+        return count
+
+    def overnight_handoff(self) -> None:
+        """Stop agent-side monitoring and hand extended-hours responsibility to the user."""
+        for position in self.positions.all():
+            target_order_id = self._target_orders.pop(position.symbol, None)
+            if target_order_id:
+                try:
+                    self.execution.cancel(target_order_id)
+                except Exception as exc:
+                    print(f"HANDOFF {position.symbol}: target cancellation failed: {exc}")
+            self._stop_watcher(position.symbol)
+            side = "LONG" if position.quantity > 0 else "SHORT"
+            target = f"${position.target_price:,.4f}" if position.target_price is not None else "N/A"
+            stop = f"${position.stop_price:,.4f}" if position.stop_price is not None else "N/A"
+            self._notify_text(
+                f"🌙 OVERNIGHT HANDOFF — {position.symbol} {side}\n"
+                f"Entry: ${position.average_price:,.4f}\n"
+                f"Target: {target}\n"
+                f"Stop: {stop}\n"
+                "AI Henge Fund will NOT monitor pre-market, after-hours, or overnight. "
+                "Please monitor the position and create any extended-hours protection manually."
+            )
 
     def open(self, *, symbol, side, quantity, price, stop_price=None, target_price=None):
         side = side.upper()
@@ -79,7 +162,8 @@ class MoomooPaperTradeLifecycle:
             executed_at=datetime.now(timezone.utc), status=FILLED_ALL,
             metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order.order_id, "broker_status": status.status, "entry_price": fill_price, "stop_price": stop_price, "target_price": target_price},
         )
-        self.positions.open_signed(symbol, signed_quantity, fill_price)
+        self.positions.open_signed(symbol, signed_quantity, fill_price, stop_price=stop_price, target_price=target_price)
+        self._state.upsert(symbol=symbol, side=side, quantity=status.filled_quantity, entry_price=fill_price, stop_price=stop_price, target_price=target_price, broker_order_id=order.order_id)
         self._notify(trade, "MOOMOO_PAPER_FILL", stop_price=stop_price, target_price=target_price)
 
         target_order_id = None
@@ -87,6 +171,7 @@ class MoomooPaperTradeLifecycle:
             target_side = "SELL" if side == "BUY" else "BUY"
             target_order = self.execution.place_limit(symbol=symbol, side=target_side, quantity=int(status.filled_quantity), price=float(target_price))
             target_order_id = target_order.order_id
+            self._target_orders[symbol] = target_order_id
             print(f"  paper target order: {target_order_id} @ ${float(target_price):,.4f}")
 
         if stop_price is not None and stop_price > 0:
@@ -101,6 +186,12 @@ class MoomooPaperTradeLifecycle:
         if position is None:
             return MoomooLifecycleResult("WAIT", None, "No open position")
         self._stop_watcher(symbol)
+        target_order_id = self._target_orders.pop(symbol, None)
+        if target_order_id:
+            try:
+                self.execution.cancel(target_order_id)
+            except Exception as exc:
+                print(f"CLOSE {symbol}: target cancellation failed: {exc}")
         closing_side = "SELL" if position.quantity > 0 else "BUY"
         quantity = abs(position.quantity)
         if float(int(quantity)) != float(quantity):
@@ -116,6 +207,7 @@ class MoomooPaperTradeLifecycle:
             metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order.order_id, "broker_status": status.status},
         )
         self.positions.close(symbol)
+        self._state.mark_closed(symbol)
         self._notify(trade, "MOOMOO_PAPER_CLOSE_FILL")
         return MoomooLifecycleResult("CLOSE", trade, "Moomoo paper close order fully filled", broker_order_id=order.order_id, broker_status=status.status)
 
@@ -177,9 +269,42 @@ class MoomooPaperTradeLifecycle:
             metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order_id},
         )
         self.positions.close(symbol)
-        self._watchers.pop(symbol, None)
+        self._target_orders.pop(symbol, None)
+        self._state.mark_closed(symbol)
         return trade
+
+    @staticmethod
+    def _has_matching_exit_order(orders, symbol, target_price, entry_side) -> bool:
+        if target_price is None:
+            return False
+        return any(
+            row["symbol"] == symbol and row["side"].endswith("SELL" if entry_side == "BUY" else "BUY")
+            and abs(row["price"] - target_price) < 1e-6
+            for row in orders
+        )
+
+    @staticmethod
+    def _matching_exit_order_id(orders, symbol, target_price, entry_side) -> str | None:
+        if target_price is None:
+            return None
+        exit_side = "SELL" if entry_side == "BUY" else "BUY"
+        for row in orders:
+            if row["symbol"] == symbol and row["side"].endswith(exit_side) and abs(row["price"] - target_price) < 1e-6:
+                return row["order_id"]
+        return None
+
+    @staticmethod
+    def _has_any_exit_order(orders, symbol, entry_side) -> bool:
+        exit_side = "SELL" if entry_side == "BUY" else "BUY"
+        return any(row["symbol"] == symbol and row["side"].endswith(exit_side) for row in orders)
 
     def _notify(self, trade, event, *, stop_price=None, target_price=None):
         if self.telegram is not None:
             self.telegram.send_trade_event(symbol=trade.symbol, side=trade.side, quantity=trade.quantity, price=trade.price, event=event, order_id=trade.trade_id, stop_price=stop_price, target_price=target_price)
+
+    def _notify_text(self, message: str) -> None:
+        if self.telegram is not None:
+            try:
+                self.telegram.send_text(message)
+            except Exception as exc:
+                print(f"TELEGRAM: notification failed: {exc}")

@@ -17,10 +17,7 @@ class TelegramConfig:
 
 
 class TelegramNotifier:
-    """Small outbound notifier for trade-event alerts.
-
-    This module sends notifications only. It has no broker or order capability.
-    """
+    """Small outbound notifier for trade-event alerts."""
 
     def __init__(self, config: TelegramConfig) -> None:
         self.config = config
@@ -35,6 +32,10 @@ class TelegramNotifier:
             timeout=self.config.timeout_seconds,
         )
         response.raise_for_status()
+
+    def send_text(self, message: str) -> None:
+        """Send a plain session/reconciliation notification."""
+        self._send(message)
 
     def send_trade_event(
         self,

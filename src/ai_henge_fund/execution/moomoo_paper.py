@@ -61,6 +61,47 @@ class MoomooPaperExecution:
         if ret != 0:
             raise RuntimeError(f"Moomoo paper order cancellation failed: {data}")
 
+    def list_positions(self) -> list[dict[str, Any]]:
+        """Read authoritative US SIMULATE positions for startup reconciliation."""
+        ret, data = self._ctx.position_list_query(trd_env=TrdEnv.SIMULATE)
+        if ret != 0:
+            raise RuntimeError(f"Moomoo paper position query failed: {data}")
+        if data is None or data.empty:
+            return []
+        rows: list[dict[str, Any]] = []
+        for _, row in data.iterrows():
+            code = str(row.get("code", "")).strip().upper()
+            qty = float(row.get("qty", row.get("position", 0)) or 0)
+            if not code or qty == 0:
+                continue
+            cost = float(row.get("cost_price", row.get("average_cost", 0)) or 0)
+            rows.append({"symbol": code, "quantity": qty, "average_price": cost, "raw": row.to_dict()})
+        return rows
+
+    def list_open_orders(self) -> list[dict[str, Any]]:
+        """Read currently working SIMULATE orders without changing them."""
+        ret, data = self._ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
+        if ret != 0:
+            raise RuntimeError(f"Moomoo paper order query failed: {data}")
+        if data is None or data.empty:
+            return []
+        terminal = {"FILLED_ALL", "CANCELLED_ALL", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}
+        rows: list[dict[str, Any]] = []
+        for _, row in data.iterrows():
+            status = str(row.get("order_status", "")).upper()
+            if status in terminal:
+                continue
+            rows.append({
+                "order_id": str(row.get("order_id", "")),
+                "symbol": str(row.get("code", "")).strip().upper(),
+                "side": str(row.get("trd_side", row.get("side", ""))).upper(),
+                "price": float(row.get("price", 0) or 0),
+                "quantity": float(row.get("qty", 0) or 0),
+                "status": status,
+                "raw": row.to_dict(),
+            })
+        return rows
+
     def _place(self, *, symbol: str, side: str, quantity: int, price: float, order_type) -> MoomooPaperOrder:
         if quantity <= 0:
             raise ValueError("quantity must be greater than zero")

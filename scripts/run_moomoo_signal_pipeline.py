@@ -150,11 +150,14 @@ def main() -> int:
     pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(GraphRunner()))
     signal_engine = DeterministicSignalEngine()
     paper_trades = 0
+    session_resumed = False
     try:
         while True:
             now = _session_now()
             if not session_loop:
+                pipeline.resume_paper_session()
                 paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades)
+                pipeline.handoff_paper_session()
                 break
             if now.weekday() >= 5:
                 print(f"U.S. market is closed today ({now:%A}). Exiting cleanly.")
@@ -165,8 +168,14 @@ def main() -> int:
                 time.sleep(min(wait_seconds, 300))
                 continue
             if now >= _session_close(now):
-                print("U.S. regular session closed at 16:00 ET. Exiting cleanly.")
+                pipeline.handoff_paper_session()
+                print("U.S. regular session closed at 16:00 ET. Overnight handoff completed.")
                 break
+
+            if not session_resumed:
+                pipeline.resume_paper_session()
+                session_resumed = True
+
             print(f"\nSESSION CYCLE {now:%Y-%m-%d %H:%M:%S %Z}")
             if paper_trades >= max_paper_trades:
                 print("Paper-trade session limit reached; continuing market monitoring without new orders.")
@@ -174,7 +183,8 @@ def main() -> int:
                 paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades)
             now = _session_now()
             if now >= _session_close(now):
-                print("U.S. regular session closed. Exiting cleanly.")
+                pipeline.handoff_paper_session()
+                print("U.S. regular session closed. Overnight handoff completed.")
                 break
             sleep_seconds = min(cycle_minutes * 60, max(1, int((_session_close(now) - now).total_seconds())))
             print(f"Next scan in {sleep_seconds // 60} minute(s).")

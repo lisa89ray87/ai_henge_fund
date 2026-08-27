@@ -44,6 +44,15 @@ class TradingPipeline:
             self._lifecycle = MoomooPaperTradeLifecycle(execution, monitor, self.positions, self.telegram, fill_timeout_seconds=settings.moomoo_paper_fill_timeout_seconds)
         return self._lifecycle
 
+    def resume_paper_session(self) -> int:
+        """Reconcile Moomoo positions and restore saved protection at session start."""
+        return self._ensure_lifecycle().reconcile_startup()
+
+    def handoff_paper_session(self) -> None:
+        """Stop agent-side protection and hand overnight responsibility to the user."""
+        if self._lifecycle is not None:
+            self._lifecycle.overnight_handoff()
+
     def close(self):
         if self._lifecycle is not None:
             self._lifecycle.close()
