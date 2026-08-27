@@ -87,6 +87,22 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             print(f"  stop    : ${result.risk.stop_price:,.4f}")
         if result.risk.target_price is not None:
             print(f"  target  : ${result.risk.target_price:,.4f}")
+
+        if result.risk.action not in {"BUY", "SELL"}:
+            try:
+                pipeline.telegram.send_risk_event(
+                    symbol=snapshot.symbol,
+                    side=result.ai_decision,
+                    price=float(snapshot.last_price),
+                    reason=result.risk.reason,
+                    entry_price=result.risk.entry_price,
+                    stop_price=result.risk.stop_price,
+                    target_price=result.risk.target_price,
+                )
+                print(f"  telegram: RISK_REJECTED sent for {snapshot.symbol}")
+            except Exception as exc:
+                print(f"  telegram: SKIP ({exc})")
+
         if result.lifecycle is not None:
             paper_trades += 1
             print(f"  paper lifecycle: {result.lifecycle.action}")
