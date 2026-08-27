@@ -53,12 +53,15 @@ def _session_close(now: datetime) -> datetime:
 
 def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades) -> int:
     snapshots = []
+    cycle_market_state = None
     for symbol in universe:
         try:
             quote = market_data.get_quote(symbol)
             candles = market_data.get_candles(symbol, num=candle_count, interval=interval)
-            market_state = market_data.get_market_state(symbol)
-            snapshot = build_signal_snapshot(symbol=symbol, quote=quote, market_state=market_state, candles=candles, data_source="moomoo_opend")
+            if cycle_market_state is None:
+                cycle_market_state = market_data.get_market_state(symbol)
+                print(f"CYCLE MARKET STATE: {cycle_market_state}")
+            snapshot = build_signal_snapshot(symbol=symbol, quote=quote, market_state=cycle_market_state, candles=candles, data_source="moomoo_opend")
             signal = signal_engine.evaluate(snapshot)
             print(f"SCAN {symbol}: {signal.direction} score={signal.score} state={signal.setup_state}")
             if snapshot.is_usable and signal.direction in {"LONG", "SHORT"}:
