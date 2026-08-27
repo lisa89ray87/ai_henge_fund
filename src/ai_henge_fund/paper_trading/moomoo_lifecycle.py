@@ -20,6 +20,9 @@ class MoomooLifecycleResult:
     reason: str
     broker_order_id: str | None = None
     broker_status: str | None = None
+    entry_price: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
 
 
 class MoomooPaperTradeLifecycle:
@@ -56,6 +59,8 @@ class MoomooPaperTradeLifecycle:
         side: str,
         quantity: float,
         price: float,
+        stop_price: float | None = None,
+        target_price: float | None = None,
     ) -> MoomooLifecycleResult:
         side = side.upper()
         symbol = symbol.strip().upper()
@@ -90,6 +95,9 @@ class MoomooPaperTradeLifecycle:
                 "Moomoo paper order submitted but not fully filled",
                 broker_order_id=order.order_id,
                 broker_status=status.status,
+                entry_price=price,
+                stop_price=stop_price,
+                target_price=target_price,
             )
 
         fill_price = status.average_price or price
@@ -106,16 +114,27 @@ class MoomooPaperTradeLifecycle:
                 "trading_environment": "SIMULATE",
                 "broker_order_id": order.order_id,
                 "broker_status": status.status,
+                "entry_price": fill_price,
+                "stop_price": stop_price,
+                "target_price": target_price,
             },
         )
         self.positions.open(symbol, status.filled_quantity, fill_price)
-        self._notify(trade, "MOOMOO_PAPER_FILL")
+        self._notify(
+            trade,
+            "MOOMOO_PAPER_FILL",
+            stop_price=stop_price,
+            target_price=target_price,
+        )
         return MoomooLifecycleResult(
             "OPEN",
             trade,
             "Moomoo paper order fully filled",
             broker_order_id=order.order_id,
             broker_status=status.status,
+            entry_price=fill_price,
+            stop_price=stop_price,
+            target_price=target_price,
         )
 
     def close_position(self, *, symbol: str, price: float) -> MoomooLifecycleResult:
@@ -176,7 +195,14 @@ class MoomooPaperTradeLifecycle:
             broker_status=status.status,
         )
 
-    def _notify(self, trade: PaperTrade, event: str) -> None:
+    def _notify(
+        self,
+        trade: PaperTrade,
+        event: str,
+        *,
+        stop_price: float | None = None,
+        target_price: float | None = None,
+    ) -> None:
         if self.telegram is not None:
             self.telegram.send_trade_event(
                 symbol=trade.symbol,
@@ -185,4 +211,6 @@ class MoomooPaperTradeLifecycle:
                 price=trade.price,
                 event=event,
                 order_id=trade.trade_id,
+                stop_price=stop_price,
+                target_price=target_price,
             )
