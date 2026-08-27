@@ -25,6 +25,17 @@ class TelegramNotifier:
     def __init__(self, config: TelegramConfig) -> None:
         self.config = config
 
+    def _send(self, message: str) -> None:
+        if not self.config.enabled:
+            return
+        url = f"https://api.telegram.org/bot{self.config.bot_token}/sendMessage"
+        response = httpx.post(
+            url,
+            json={"chat_id": self.config.chat_id, "text": message},
+            timeout=self.config.timeout_seconds,
+        )
+        response.raise_for_status()
+
     def send_trade_event(
         self,
         *,
@@ -37,9 +48,6 @@ class TelegramNotifier:
         stop_price: float | None = None,
         target_price: float | None = None,
     ) -> None:
-        if not self.config.enabled:
-            return
-
         message = (
             "📈 AI Henge Fund Trade Event\n"
             f"Event: {event}\n"
@@ -54,11 +62,31 @@ class TelegramNotifier:
             message += f"\nTarget: ${target_price:,.4f}"
         if order_id:
             message += f"\nOrder ID: {order_id}"
+        self._send(message)
 
-        url = f"https://api.telegram.org/bot{self.config.bot_token}/sendMessage"
-        response = httpx.post(
-            url,
-            json={"chat_id": self.config.chat_id, "text": message},
-            timeout=self.config.timeout_seconds,
+    def send_risk_event(
+        self,
+        *,
+        symbol: str,
+        side: str,
+        price: float,
+        reason: str,
+        entry_price: float | None = None,
+        stop_price: float | None = None,
+        target_price: float | None = None,
+    ) -> None:
+        message = (
+            "⚠️ AI Henge Fund Risk Event\n"
+            "Event: RISK_REJECTED\n"
+            f"Symbol: {symbol.upper()}\n"
+            f"Signal: {side.upper()}\n"
+            f"Price: ${price:,.4f}\n"
+            f"Reason: {reason}"
         )
-        response.raise_for_status()
+        if entry_price is not None:
+            message += f"\nEntry: ${entry_price:,.4f}"
+        if stop_price is not None:
+            message += f"\nStop: ${stop_price:,.4f}"
+        if target_price is not None:
+            message += f"\nTarget: ${target_price:,.4f}"
+        self._send(message)
