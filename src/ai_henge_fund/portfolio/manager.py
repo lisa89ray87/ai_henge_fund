@@ -10,10 +10,12 @@ class Position:
     quantity: float
     average_price: float
     opened_at: datetime
+    stop_price: float | None = None
+    target_price: float | None = None
 
 
 class PositionManager:
-    """In-memory paper position state with duplicate-entry protection."""
+    """In-memory paper position state with broker-session reconciliation."""
 
     def __init__(self) -> None:
         self._positions: dict[str, Position] = {}
@@ -21,21 +23,42 @@ class PositionManager:
     def get(self, symbol: str) -> Position | None:
         return self._positions.get(symbol.strip().upper())
 
+    def all(self) -> list[Position]:
+        return list(self._positions.values())
+
     def can_open(self, symbol: str, side: str) -> bool:
         return self.get(symbol) is None
 
     def open(self, symbol: str, quantity: float, price: float) -> Position:
-        """Open a long-compatible positive position for backwards compatibility."""
         return self.open_signed(symbol, quantity, price)
 
-    def open_signed(self, symbol: str, quantity: float, price: float) -> Position:
-        """Open a signed paper position; positive=long, negative=short."""
+    def open_signed(self, symbol: str, quantity: float, price: float,
+                    *, stop_price: float | None = None, target_price: float | None = None,
+                    opened_at: datetime | None = None) -> Position:
         symbol = symbol.strip().upper()
         if self.get(symbol) is not None:
             raise ValueError(f"position already open for {symbol}")
         if quantity == 0 or price <= 0:
             raise ValueError("non-zero quantity and positive price are required")
-        position = Position(symbol, quantity, price, datetime.now(timezone.utc))
+        position = Position(
+            symbol, quantity, price, opened_at or datetime.now(timezone.utc),
+            stop_price=stop_price, target_price=target_price,
+        )
+        self._positions[symbol] = position
+        return position
+
+    def restore(self, symbol: str, quantity: float, price: float, *,
+                stop_price: float | None = None, target_price: float | None = None,
+                opened_at: datetime | None = None) -> Position:
+        """Restore broker state without treating it as a new entry."""
+        symbol = symbol.strip().upper()
+        if quantity == 0:
+            self._positions.pop(symbol, None)
+            raise ValueError("cannot restore a zero-quantity position")
+        position = Position(
+            symbol, quantity, price, opened_at or datetime.now(timezone.utc),
+            stop_price=stop_price, target_price=target_price,
+        )
         self._positions[symbol] = position
         return position
 
