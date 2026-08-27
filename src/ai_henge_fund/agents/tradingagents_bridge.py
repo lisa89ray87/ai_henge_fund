@@ -65,7 +65,15 @@ class TradingAgentsBridge:
 
 
 class TradingAgentsGraphRuntime:
-    """Production adapter around TauricResearch TradingAgentsGraph."""
+    """Production adapter around TauricResearch TradingAgentsGraph.
+
+    AI is an enhancement layer, not a hard availability dependency for paper
+    testing. If the configured LLM provider(s) are temporarily unavailable due
+    to quota/rate-limit/authentication/billing errors, this runtime falls back
+    to the deterministic signal supplied in the request. The fallback remains
+    conservative: its confidence is derived from the deterministic score and
+    the downstream RiskGate still has final authority before any paper order.
+    """
 
     def __init__(self) -> None:
         try:
@@ -85,9 +93,7 @@ class TradingAgentsGraphRuntime:
         elif self._has_gemini_key():
             self._primary_provider = "google_genai"
         else:
-            raise RuntimeError(
-                "No AI provider is configured. Set OPENAI_API_KEY and/or GEMINI_API_KEY."
-            )
+            self._primary_provider = None
 
     @staticmethod
     def _has_key(name: str) -> bool:
@@ -135,13 +141,14 @@ class TradingAgentsGraphRuntime:
 
     @staticmethod
     def _is_provider_failure(exc: Exception) -> bool:
-        """Return True only for failures where changing LLM providers is sensible."""
+        """Return True only for failures where changing/falling back is sensible."""
         message = str(exc).lower()
         markers = (
             "429",
             "rate limit",
             "rate_limit",
             "quota",
+            "resource_exhausted",
             "insufficient_quota",
             "billing",
             "credit balance",
@@ -149,6 +156,10 @@ class TradingAgentsGraphRuntime:
             "unauthorized",
             "invalid api key",
             "api key is invalid",
+            "not_found",
+            "model is not found",
+            "no longer available",
+            "not supported for generatecontent",
         )
         return any(marker in message for marker in markers)
 
@@ -162,13 +173,7 @@ class TradingAgentsGraphRuntime:
 
     @staticmethod
     def _normalize_decision(raw_decision: Any, symbol: str) -> tuple[str, float | None, str]:
-        """Normalize current TradingAgents dict or string decision formats.
-
-        Newer/older TradingAgents releases can return the final decision as a
-        dictionary or as a JSON/plain string. We accept both, but never invent
-        confidence: a missing confidence remains None so the downstream risk
-        gate can fail closed.
-        """
+        """Normalize current TradingAgents dict or string decision formats."""
         value = raw_decision
         if isinstance(value, str):
             text = value.strip()
@@ -218,6 +223,29 @@ class TradingAgentsGraphRuntime:
 
         return action, confidence, rationale
 
+    @staticmethod
+    def _deterministic_fallback(request: dict[str, Any], reason: str) -> TradingAgentsDecision:
+        """Produce a conservative provider-independent decision for paper testing."""
+        direction = str(request.get("deterministic_direction", "NEUTRAL")).upper()
+        score = float(request.get("deterministic_score", 0) or 0)
+        if direction == "LONG":
+            action = "BUY"
+        elif direction == "SHORT":
+            action = "SELL"
+        else:
+            action = "HOLD"
+
+        # The deterministic engine's maximum absolute score is 8. Strong setups
+        # therefore retain meaningful confidence; weaker setups remain below the
+        # normal 0.70 RiskGate threshold and cannot place a paper order.
+        confidence = min(1.0, abs(score) / 8.0)
+        return TradingAgentsDecision(
+            action=action,
+            confidence=confidence,
+            rationale=f"AI provider unavailable; deterministic fallback used. {reason}",
+            provider="deterministic-fallback",
+        )
+
     def _run(self, provider: str, request: dict[str, Any]) -> TradingAgentsDecision:
         symbol = str(request["symbol"]).strip().upper()
         tradingagents_symbol = self._normalize_tradingagents_symbol(symbol)
@@ -240,18 +268,36 @@ class TradingAgentsGraphRuntime:
         )
 
     def analyze(self, request: dict[str, Any]) -> TradingAgentsDecision:
-        """Run the primary provider and fall back to Gemini when appropriate."""
+        """Use AI when available, otherwise continue with deterministic reasoning."""
+        if self._primary_provider is None:
+            print("No AI provider configured; using deterministic fallback.")
+            return self._deterministic_fallback(request, "no AI provider configured")
+
         primary = self._primary_provider
         try:
             return self._run(primary, request)
         except Exception as primary_exc:
-            if primary != "openai" or not self._has_gemini_key():
-                raise
             if not self._is_provider_failure(primary_exc):
                 raise
 
+            if primary == "openai" and self._has_gemini_key():
+                print(
+                    "OpenAI provider failed with a provider-level error; "
+                    "retrying this analysis with Gemini."
+                )
+                try:
+                    return self._run("google_genai", request)
+                except Exception as gemini_exc:
+                    if not self._is_provider_failure(gemini_exc):
+                        raise
+                    print(
+                        "Gemini provider also failed with a provider-level error; "
+                        "using deterministic fallback for this analysis."
+                    )
+                    return self._deterministic_fallback(request, str(gemini_exc))
+
             print(
-                "OpenAI provider failed with a provider-level error; "
-                "retrying this analysis with Gemini."
+                f"{primary} provider failed with a provider-level error; "
+                "using deterministic fallback for this analysis."
             )
-            return self._run("google_genai", request)
+            return self._deterministic_fallback(request, str(primary_exc))
