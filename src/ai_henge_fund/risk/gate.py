@@ -28,7 +28,7 @@ class RiskGate:
         *,
         max_position_value: float = 10_000.0,
         min_ai_confidence: float = 0.70,
-        allowed_market_states: Iterable[str] = ("REGULAR", "PRE_MARKET", "AFTER_HOURS"),
+        allowed_market_states: Iterable[str] = ("REGULAR", "PRE_MARKET", "AFTERNOON", "AFTER_HOURS"),
         reward_risk_multiple: float = 2.0,
     ) -> None:
         if max_position_value <= 0:
