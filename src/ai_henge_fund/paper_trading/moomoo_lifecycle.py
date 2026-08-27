@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from threading import Event, Thread
+from time import sleep
+
+from moomoo import OpenQuoteContext
 
 from ai_henge_fund.alerts.telegram import TelegramNotifier
-from ai_henge_fund.execution.moomoo_order_monitor import (
-    FILLED_ALL,
-    MoomooPaperOrderMonitor,
-)
+from ai_henge_fund.execution.moomoo_order_monitor import FILLED_ALL, MoomooPaperOrderMonitor
 from ai_henge_fund.execution.moomoo_paper import MoomooPaperExecution
 from ai_henge_fund.paper_trading.engine import PaperTrade
 from ai_henge_fund.portfolio.manager import PositionManager
@@ -26,16 +27,28 @@ class MoomooLifecycleResult:
 
 
 class MoomooPaperTradeLifecycle:
-    """Execute the strategy lifecycle through Moomoo US SIMULATE only."""
+    """Execute the strategy lifecycle through Moomoo US SIMULATE only.
 
-    def __init__(self, execution, monitor, positions, telegram=None, *, fill_timeout_seconds=30):
+    Moomoo SIMULATE supports limit/market orders, not native stop orders.
+    The target is therefore a real resting limit order and the stop is
+    enforced by a client-side price watcher which submits a market exit.
+    """
+
+    def __init__(self, execution, monitor, positions, telegram=None, *, fill_timeout_seconds=30, exit_poll_seconds=2.0):
         self.execution = execution
         self.monitor = monitor
         self.positions = positions
         self.telegram = telegram
         self.fill_timeout_seconds = fill_timeout_seconds
+        self.exit_poll_seconds = exit_poll_seconds
+        self._watchers: dict[str, tuple[Event, Thread]] = {}
+        self._quote = OpenQuoteContext(host="127.0.0.1", port=11111)
 
     def close(self) -> None:
+        for stop_event, _thread in list(self._watchers.values()):
+            stop_event.set()
+        self._watchers.clear()
+        self._quote.close()
         self.execution.close()
         self.monitor.close()
 
@@ -68,13 +81,26 @@ class MoomooPaperTradeLifecycle:
         )
         self.positions.open_signed(symbol, signed_quantity, fill_price)
         self._notify(trade, "MOOMOO_PAPER_FILL", stop_price=stop_price, target_price=target_price)
-        return MoomooLifecycleResult("OPEN", trade, "Moomoo paper order fully filled", broker_order_id=order.order_id, broker_status=status.status, entry_price=fill_price, stop_price=stop_price, target_price=target_price)
+
+        target_order_id = None
+        if target_price is not None and target_price > 0:
+            target_side = "SELL" if side == "BUY" else "BUY"
+            target_order = self.execution.place_limit(symbol=symbol, side=target_side, quantity=int(status.filled_quantity), price=float(target_price))
+            target_order_id = target_order.order_id
+            print(f"  paper target order: {target_order_id} @ ${float(target_price):,.4f}")
+
+        if stop_price is not None and stop_price > 0:
+            self._start_exit_watcher(symbol, side, int(status.filled_quantity), float(stop_price), target_order_id)
+            print(f"  paper stop watcher: ${float(stop_price):,.4f}")
+
+        return MoomooLifecycleResult("OPEN", trade, "Moomoo paper order fully filled; exit protection armed", broker_order_id=order.order_id, broker_status=status.status, entry_price=fill_price, stop_price=stop_price, target_price=target_price)
 
     def close_position(self, *, symbol, price):
         symbol = symbol.strip().upper()
         position = self.positions.get(symbol)
         if position is None:
             return MoomooLifecycleResult("WAIT", None, "No open position")
+        self._stop_watcher(symbol)
         closing_side = "SELL" if position.quantity > 0 else "BUY"
         quantity = abs(position.quantity)
         if float(int(quantity)) != float(quantity):
@@ -86,13 +112,73 @@ class MoomooPaperTradeLifecycle:
         fill_price = status.average_price or price
         trade = PaperTrade(
             trade_id=f"moomoo-{order.order_id}", symbol=symbol, side=closing_side,
-            quantity=status.filled_quantity, price=fill_price,
-            executed_at=datetime.now(timezone.utc), status=FILLED_ALL,
+            quantity=status.filled_quantity, price=fill_price, executed_at=datetime.now(timezone.utc), status=FILLED_ALL,
             metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order.order_id, "broker_status": status.status},
         )
         self.positions.close(symbol)
         self._notify(trade, "MOOMOO_PAPER_CLOSE_FILL")
         return MoomooLifecycleResult("CLOSE", trade, "Moomoo paper close order fully filled", broker_order_id=order.order_id, broker_status=status.status)
+
+    def _start_exit_watcher(self, symbol, entry_side, quantity, stop_price, target_order_id):
+        self._stop_watcher(symbol)
+        stop_event = Event()
+        thread = Thread(target=self._watch_exit, args=(symbol, entry_side, quantity, stop_price, target_order_id, stop_event), daemon=True)
+        self._watchers[symbol] = (stop_event, thread)
+        thread.start()
+
+    def _stop_watcher(self, symbol):
+        watcher = self._watchers.pop(symbol, None)
+        if watcher is not None:
+            watcher[0].set()
+
+    def _watch_exit(self, symbol, entry_side, quantity, stop_price, target_order_id, stop_event):
+        while not stop_event.is_set():
+            try:
+                if target_order_id:
+                    target_status = self.monitor.get(target_order_id)
+                    if target_status.status == FILLED_ALL:
+                        fill_price = target_status.average_price or stop_price
+                        trade = self._exit_trade(symbol, "SELL" if entry_side == "BUY" else "BUY", target_status.filled_quantity, fill_price, target_order_id)
+                        self._notify(trade, "MOOMOO_PAPER_TARGET_FILL", target_price=fill_price)
+                        return
+                    if target_status.status in {"CANCELLED_ALL", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}:
+                        target_order_id = None
+
+                ret, data = self._quote.get_market_snapshot([symbol])
+                if ret != 0 or data.empty:
+                    sleep(self.exit_poll_seconds)
+                    continue
+                last_price = float(data.iloc[0].get("last_price", 0.0) or 0.0)
+                triggered = last_price <= stop_price if entry_side == "BUY" else last_price >= stop_price
+                if triggered:
+                    if target_order_id:
+                        try:
+                            self.execution.cancel(target_order_id)
+                        except Exception as exc:
+                            print(f"EXIT {symbol}: target cancellation failed: {exc}")
+                    exit_side = "SELL" if entry_side == "BUY" else "BUY"
+                    exit_order = self.execution.place_market(symbol=symbol, side=exit_side, quantity=quantity)
+                    exit_status = self.monitor.wait_for_terminal(exit_order.order_id, timeout_seconds=self.fill_timeout_seconds)
+                    if exit_status.status == FILLED_ALL:
+                        fill_price = exit_status.average_price or last_price
+                        trade = self._exit_trade(symbol, exit_side, exit_status.filled_quantity, fill_price, exit_order.order_id)
+                        self._notify(trade, "MOOMOO_PAPER_STOP_FILL", stop_price=stop_price)
+                    else:
+                        print(f"EXIT {symbol}: stop market order did not fully fill: {exit_status.status}")
+                    return
+            except Exception as exc:
+                print(f"EXIT {symbol}: watcher error: {exc}")
+            sleep(self.exit_poll_seconds)
+
+    def _exit_trade(self, symbol, side, quantity, price, order_id):
+        trade = PaperTrade(
+            trade_id=f"moomoo-{order_id}", symbol=symbol, side=side, quantity=quantity, price=price,
+            executed_at=datetime.now(timezone.utc), status=FILLED_ALL,
+            metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order_id},
+        )
+        self.positions.close(symbol)
+        self._watchers.pop(symbol, None)
+        return trade
 
     def _notify(self, trade, event, *, stop_price=None, target_price=None):
         if self.telegram is not None:
