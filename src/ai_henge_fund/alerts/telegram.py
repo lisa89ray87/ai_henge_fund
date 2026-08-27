@@ -34,6 +34,8 @@ class TelegramNotifier:
         price: float,
         event: str = "PAPER_TRADE",
         order_id: str | None = None,
+        stop_price: float | None = None,
+        target_price: float | None = None,
     ) -> None:
         if not self.config.enabled:
             return
@@ -44,8 +46,12 @@ class TelegramNotifier:
             f"Symbol: {symbol.upper()}\n"
             f"Side: {side.upper()}\n"
             f"Quantity: {quantity:g}\n"
-            f"Price: ${price:,.4f}"
+            f"Entry: ${price:,.4f}"
         )
+        if stop_price is not None:
+            message += f"\nStop: ${stop_price:,.4f}"
+        if target_price is not None:
+            message += f"\nTarget: ${target_price:,.4f}"
         if order_id:
             message += f"\nOrder ID: {order_id}"
 
