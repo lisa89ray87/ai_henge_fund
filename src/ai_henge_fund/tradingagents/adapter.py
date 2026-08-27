@@ -48,6 +48,10 @@ class TradingAgentsAdapter:
                 "setup_state": signal.setup_state,
                 "reasons": list(signal.reasons),
             },
+            # Explicit fallback inputs let the runtime continue paper-testing
+            # when OpenAI/Gemini quotas or provider access are temporarily down.
+            "deterministic_direction": signal.direction,
+            "deterministic_score": signal.score,
             "capabilities": {"market_data": True, "orders": False, "account_mutation": False},
         }
 
@@ -57,12 +61,13 @@ class TradingAgentsAdapter:
                 "SHORT": "SELL",
                 "NEUTRAL": "WAIT",
             }.get(signal.direction, "WAIT")
+            fallback_confidence = min(1.0, abs(signal.score) / 8.0)
 
             return AITradeDecision(
                 snapshot.symbol,
                 fallback_decision,
-                0.0,
-                "TradingAgents runner not configured; deterministic signal only",
+                fallback_confidence,
+                "TradingAgents runner not configured; deterministic fallback used",
                 "deterministic-fallback",
             )
 
@@ -72,4 +77,5 @@ class TradingAgentsAdapter:
             decision = "WAIT"
         confidence = max(0.0, min(1.0, float(result.get("confidence", 0.0))))
         rationale = str(result.get("rationale", "No rationale returned"))
-        return AITradeDecision(snapshot.symbol, decision, confidence, rationale, "tradingagents")
+        provider = str(result.get("provider", "tradingagents"))
+        return AITradeDecision(snapshot.symbol, decision, confidence, rationale, provider)
