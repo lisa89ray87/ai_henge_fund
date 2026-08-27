@@ -86,7 +86,9 @@ class TradingPipeline:
                     symbol=snapshot.symbol,
                     side="BUY",
                     quantity=risk.quantity,
-                    price=float(snapshot.last_price),
+                    price=risk.entry_price or float(snapshot.last_price),
+                    stop_price=risk.stop_price,
+                    target_price=risk.target_price,
                 )
             elif risk.action == "SELL" and risk.quantity > 0 and self.positions.get(snapshot.symbol) is not None:
                 lifecycle = self._ensure_lifecycle().close_position(
