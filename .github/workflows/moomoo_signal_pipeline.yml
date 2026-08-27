@@ -20,6 +20,7 @@ jobs:
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       PYTHON_ROOT: 'C:\Users\limli\AppData\Local\Programs\Python\Python312'
+      PYTHONUTF8: "1"
       MOOMOO_OPEND_ENABLED: "true"
       MOOMOO_READ_ONLY: "true"
       MOOMOO_OPEND_HOST: "127.0.0.1"
@@ -56,7 +57,7 @@ jobs:
           echo %PYTHON_ROOT%>>"%GITHUB_PATH%"
           echo %PYTHON_ROOT%\Scripts>>"%GITHUB_PATH%"
           "%PYTHON_ROOT%\python.exe" --version
-          "%PYTHON_ROOT%\python.exe" -c "import sys; print(sys.executable)"
+          "%PYTHON_ROOT%\python.exe" -c "import sys; print(sys.executable); print('UTF-8 mode:', sys.flags.utf8_mode)"
 
       - name: Install project
         shell: cmd
