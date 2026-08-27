@@ -15,6 +15,9 @@ class RiskDecision:
     risk_per_share: float | None
     reason: str
     checks: tuple[str, ...]
+    entry_price: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
 
 
 class RiskGate:
@@ -26,14 +29,41 @@ class RiskGate:
         max_position_value: float = 10_000.0,
         min_ai_confidence: float = 0.70,
         allowed_market_states: Iterable[str] = ("REGULAR", "PRE_MARKET", "AFTER_HOURS"),
+        reward_risk_multiple: float = 2.0,
     ) -> None:
         if max_position_value <= 0:
             raise ValueError("max_position_value must be greater than zero")
         if not 0 <= min_ai_confidence <= 1:
             raise ValueError("min_ai_confidence must be between 0 and 1")
+        if reward_risk_multiple <= 0:
+            raise ValueError("reward_risk_multiple must be greater than zero")
         self.max_position_value = max_position_value
         self.min_ai_confidence = min_ai_confidence
         self.allowed_market_states = frozenset(allowed_market_states)
+        self.reward_risk_multiple = reward_risk_multiple
+
+    @staticmethod
+    def _trade_levels(snapshot: SignalSnapshot, direction: str) -> tuple[float, float, float]:
+        """Build a deterministic entry/stop/target plan from recent candles."""
+        entry = float(snapshot.last_price)
+        candles = snapshot.candles[-5:]
+        lows = [float(c["low"]) for c in candles if c.get("low") is not None]
+        highs = [float(c["high"]) for c in candles if c.get("high") is not None]
+        if direction == "BUY":
+            if not lows:
+                raise ValueError("Recent low data unavailable for LONG stop")
+            stop = min(lows)
+            if stop >= entry:
+                raise ValueError("LONG stop is not below entry")
+            target = entry + (entry - stop) * 2.0
+        else:
+            if not highs:
+                raise ValueError("Recent high data unavailable for SHORT stop")
+            stop = max(highs)
+            if stop <= entry:
+                raise ValueError("SHORT stop is not above entry")
+            target = entry - (stop - entry) * 2.0
+        return entry, stop, target
 
     def evaluate(
         self,
@@ -68,10 +98,27 @@ class RiskGate:
             return RiskDecision("WAIT", 0, None, "AI confidence below risk threshold", tuple(checks))
         checks.append("AI_CONFIDENCE")
 
-        price = float(snapshot.last_price)
-        quantity = max(1, int(self.max_position_value // price))
+        try:
+            entry, stop, target = self._trade_levels(snapshot, expected)
+        except ValueError as exc:
+            return RiskDecision("WAIT", 0, None, str(exc), tuple(checks))
+        risk_per_share = abs(entry - stop)
+        if risk_per_share <= 0:
+            return RiskDecision("WAIT", 0, None, "Invalid trade risk distance", tuple(checks))
+        checks.append("TRADE_LEVELS")
+
+        quantity = max(1, int(self.max_position_value // entry))
         if quantity <= 0:
             return RiskDecision("WAIT", 0, None, "Price exceeds maximum position value", tuple(checks))
 
         checks.append("POSITION_SIZE")
-        return RiskDecision(expected, float(quantity), None, "All risk gates passed", tuple(checks))
+        return RiskDecision(
+            expected,
+            float(quantity),
+            risk_per_share,
+            "All risk gates passed",
+            tuple(checks),
+            entry_price=entry,
+            stop_price=stop,
+            target_price=target,
+        )
