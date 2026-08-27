@@ -13,6 +13,7 @@ concurrency:
 jobs:
   signal:
     runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 420
     env:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
