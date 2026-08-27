@@ -1,12 +1,4 @@
-"""Run the Moomoo OpenD universe -> deterministic -> TradingAgents -> risk pipeline.
-
-Default mode is analysis-only. Paper execution requires explicit opt-in through
-EXECUTE_PAPER=true. Live broker trading is never supported by this script.
-
-When SESSION_RUN_UNTIL_CLOSE=true, the runner waits for the U.S. regular session
-open and then repeats the scan until 16:00 America/New_York. This keeps one
-workflow alive for the full regular session instead of requiring manual reruns.
-"""
+"""Run the Moomoo OpenD universe -> deterministic -> TradingAgents -> risk pipeline."""
 
 from __future__ import annotations
 
@@ -25,8 +17,6 @@ from ai_henge_fund.tradingagents.adapter import TradingAgentsAdapter
 
 
 class GraphRunner:
-    """Adapt the production TradingAgents graph result to TradingPipeline."""
-
     def __init__(self) -> None:
         self.runtime = TradingAgentsGraphRuntime()
 
@@ -35,12 +25,7 @@ class GraphRunner:
         action = decision.action.lower()
         mapped = {"buy": "BUY", "sell": "SELL", "hold": "WAIT"}.get(action, "WAIT")
         confidence = 0.0 if decision.confidence is None else decision.confidence
-        return {
-            "decision": mapped,
-            "confidence": confidence,
-            "rationale": decision.rationale,
-            "provider": decision.provider,
-        }
+        return {"decision": mapped, "confidence": confidence, "rationale": decision.rationale, "provider": decision.provider}
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -66,31 +51,14 @@ def _session_close(now: datetime) -> datetime:
     return now.replace(hour=16, minute=0, second=0, microsecond=0)
 
 
-def _run_cycle(
-    market_data,
-    pipeline: TradingPipeline,
-    signal_engine: DeterministicSignalEngine,
-    universe: list[str],
-    candle_count: int,
-    interval: str,
-    execute_paper: bool,
-    max_ai_candidates: int,
-    paper_trades: int,
-    max_paper_trades: int,
-) -> int:
-    snapshots: list[tuple[object, object]] = []
+def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades) -> int:
+    snapshots = []
     for symbol in universe:
         try:
             quote = market_data.get_quote(symbol)
             candles = market_data.get_candles(symbol, num=candle_count, interval=interval)
             market_state = market_data.get_market_state(symbol)
-            snapshot = build_signal_snapshot(
-                symbol=symbol,
-                quote=quote,
-                market_state=market_state,
-                candles=candles,
-                data_source="moomoo_opend",
-            )
+            snapshot = build_signal_snapshot(symbol=symbol, quote=quote, market_state=market_state, candles=candles, data_source="moomoo_opend")
             signal = signal_engine.evaluate(snapshot)
             print(f"SCAN {symbol}: {signal.direction} score={signal.score} state={signal.setup_state}")
             if snapshot.is_usable and signal.direction in {"LONG", "SHORT"}:
@@ -111,15 +79,18 @@ def _run_cycle(
             print(f"AI/PIPELINE {snapshot.symbol}: SKIP ({exc})")
             continue
 
-        print(
-            f"RESULT {snapshot.symbol}: deterministic={result.deterministic_direction} "
-            f"ai={result.ai_decision} risk={result.risk.action} qty={result.risk.quantity:g}"
-        )
+        print(f"RESULT {snapshot.symbol}: deterministic={result.deterministic_direction} ai={result.ai_decision} risk={result.risk.action} qty={result.risk.quantity:g}")
         print(f"  reason: {result.risk.reason}")
+        if result.risk.entry_price is not None:
+            print(f"  entry   : ${result.risk.entry_price:,.4f}")
+        if result.risk.stop_price is not None:
+            print(f"  stop    : ${result.risk.stop_price:,.4f}")
+        if result.risk.target_price is not None:
+            print(f"  target  : ${result.risk.target_price:,.4f}")
         if result.lifecycle is not None:
             paper_trades += 1
             print(f"  paper lifecycle: {result.lifecycle.action}")
-            print(f"  paper message  : {result.lifecycle.message}")
+            print(f"  paper message  : {result.lifecycle.reason}")
             if result.lifecycle.broker_order_id:
                 print(f"  paper order ID : {result.lifecycle.broker_order_id}")
             if paper_trades >= max_paper_trades:
@@ -164,35 +135,24 @@ def main() -> int:
         while True:
             now = _session_now()
             if not session_loop:
-                paper_trades = _run_cycle(
-                    market_data, pipeline, signal_engine, universe, candle_count, interval,
-                    execute_paper, max_ai_candidates, paper_trades, max_paper_trades,
-                )
+                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades)
                 break
-
             if now.weekday() >= 5:
                 print(f"U.S. market is closed today ({now:%A}). Exiting cleanly.")
                 break
-
             if now < _session_open(now):
                 wait_seconds = max(1, int((_session_open(now) - now).total_seconds()))
                 print(f"Waiting for U.S. regular open at 09:30 ET ({wait_seconds}s).")
                 time.sleep(min(wait_seconds, 300))
                 continue
-
             if now >= _session_close(now):
                 print("U.S. regular session closed at 16:00 ET. Exiting cleanly.")
                 break
-
             print(f"\nSESSION CYCLE {now:%Y-%m-%d %H:%M:%S %Z}")
             if paper_trades >= max_paper_trades:
                 print("Paper-trade session limit reached; continuing market monitoring without new orders.")
             else:
-                paper_trades = _run_cycle(
-                    market_data, pipeline, signal_engine, universe, candle_count, interval,
-                    execute_paper, max_ai_candidates, paper_trades, max_paper_trades,
-                )
-
+                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades)
             now = _session_now()
             if now >= _session_close(now):
                 print("U.S. regular session closed. Exiting cleanly.")
@@ -200,7 +160,6 @@ def main() -> int:
             sleep_seconds = min(cycle_minutes * 60, max(1, int((_session_close(now) - now).total_seconds())))
             print(f"Next scan in {sleep_seconds // 60} minute(s).")
             time.sleep(sleep_seconds)
-
         print(f"Universe scanned per cycle: {len(universe)}")
         print(f"Session paper trades: {paper_trades}")
         print("Moomoo signal pipeline: PASS")
