@@ -19,6 +19,8 @@ jobs:
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN }}
+      AI_HEDGE_FUND_TELEGRAM_CHAT_ID: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_CHAT_ID }}
       PYTHON_ROOT: 'C:\Users\limli\AppData\Local\Programs\Python\Python312'
       PYTHONUTF8: "1"
       MOOMOO_OPEND_ENABLED: "true"
@@ -75,7 +77,16 @@ jobs:
             echo ERROR: OPENAI_API_KEY or GEMINI_API_KEY is required.
             exit /b 1
           )
+          if "%AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN%"=="" (
+            echo ERROR: AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN is not configured.
+            exit /b 1
+          )
+          if "%AI_HEDGE_FUND_TELEGRAM_CHAT_ID%"=="" (
+            echo ERROR: AI_HEDGE_FUND_TELEGRAM_CHAT_ID is not configured.
+            exit /b 1
+          )
           echo Required secrets are configured.
+          echo Telegram notifier configuration is present.
 
       - name: Run Moomoo OpenD universe paper pipeline for full regular session
         shell: cmd
