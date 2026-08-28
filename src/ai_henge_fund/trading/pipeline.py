@@ -61,7 +61,7 @@ class TradingPipeline:
 
     @staticmethod
     def _validated_paper_quantity(ai: AITradeDecision, entry_price: float) -> tuple[float, str] | None:
-        """Validate AI-selected size without silently changing the AI's size."""
+        """Validate AI-selected size without applying live capital budgets in paper mode."""
         quantity = ai.quantity
         if quantity is None:
             if ai.provider == "deterministic-fallback":
@@ -70,17 +70,14 @@ class TradingPipeline:
             else:
                 return None
         else:
-            source = "ai"
+            source = ai.quantity_source or "ai"
 
         if quantity <= 0 or quantity != int(quantity) or entry_price <= 0:
             return None
 
-        settings = get_settings()
-        max_deployed = settings.ai_henge_fund_max_capital_deployed
-        max_by_capital = int(max_deployed // entry_price)
-        if max_by_capital <= 0 or int(quantity) > max_by_capital:
-            return None
-
+        # Paper/simulation deliberately ignores starting capital, maximum deployed
+        # capital, risk-per-trade percentage, and daily-loss budgets. Those values
+        # are live-trading guardrails, not simulation constraints.
         return float(int(quantity)), f"{source} position size={int(quantity)}"
 
     def _paper_test_decision(self, snapshot: SignalSnapshot, signal, ai: AITradeDecision) -> RiskDecision:
@@ -110,10 +107,6 @@ class TradingPipeline:
         validated = self._validated_paper_quantity(ai, entry)
         if validated is None:
             reason = "AI did not provide a valid paper position size"
-            if ai.quantity is not None and entry > 0:
-                max_by_capital = int(get_settings().ai_henge_fund_max_capital_deployed // entry)
-                if ai.quantity > max_by_capital:
-                    reason = f"AI position size {ai.quantity:g} exceeds paper capital limit; maximum affordable is {max_by_capital} share(s)"
             return RiskDecision(
                 "WAIT", 0, None, reason,
                 ("PAPER_RISK_BYPASS", "AI_POSITION_SIZE_REQUIRED"),
@@ -125,7 +118,7 @@ class TradingPipeline:
             expected,
             quantity,
             abs(entry - stop),
-            f"Paper-only mode: capital risk gate bypassed; {size_check}",
+            f"Paper-only mode: live capital gate bypassed; {size_check}",
             ("PAPER_RISK_BYPASS", "AI_POSITION_SIZE", "AI_TRADE_LEVELS"),
             entry_price=entry,
             stop_price=stop,
