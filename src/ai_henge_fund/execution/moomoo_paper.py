@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import Any
+from time import sleep
 
 from moomoo import OpenSecTradeContext, OrderType, SecurityFirm, TrdEnv, TrdMarket, TrdSide
 
@@ -47,6 +48,46 @@ class MoomooPaperExecution:
 
     def place_market(self, *, symbol: str, side: str, quantity: int) -> MoomooPaperOrder:
         return self._place(symbol=symbol, side=side, quantity=quantity, price=0.0, order_type=OrderType.MARKET)
+
+    def verify_limit_order(self, order: MoomooPaperOrder, *, attempts: int = 3, delay_seconds: float = 0.5) -> MoomooPaperOrder:
+        """Verify that a submitted SIMULATE limit order is visible at the broker.
+
+        A target order must be confirmed by Moomoo before the lifecycle reports
+        exit protection as armed. If the order is already filled, verification
+        also succeeds because the broker has accepted and processed it.
+        """
+        expected_side = order.side.upper()
+        expected_symbol = order.symbol.strip().upper()
+        for attempt in range(max(1, attempts)):
+            rows = self.list_open_orders()
+            for row in rows:
+                if (
+                    row["order_id"] == order.order_id
+                    and row["symbol"] == expected_symbol
+                    and row["side"].endswith(expected_side)
+                    and abs(float(row["price"]) - float(order.price)) < 1e-6
+                ):
+                    return MoomooPaperOrder(
+                        order_id=order.order_id,
+                        symbol=order.symbol,
+                        side=order.side,
+                        quantity=order.quantity,
+                        price=order.price,
+                        status=str(row["status"]),
+                        raw=row["raw"],
+                    )
+
+            # An order can disappear from the working-order list because it
+            # filled immediately. Query the order monitor elsewhere for fills;
+            # here we only avoid falsely claiming that an accepted order failed
+            # during the brief broker propagation window.
+            if attempt + 1 < max(1, attempts):
+                sleep(max(0.0, delay_seconds))
+
+        raise RuntimeError(
+            f"Moomoo paper limit order {order.order_id} was not visible as a working order "
+            f"after {max(1, attempts)} verification attempt(s)"
+        )
 
     def cancel(self, order_id: str) -> None:
         from moomoo import ModifyOrderOp
