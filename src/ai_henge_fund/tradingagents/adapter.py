@@ -14,6 +14,10 @@ class AITradeDecision:
     confidence: float
     rationale: str
     provider: str
+    quantity: float | None = None
+    entry_price: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
 
 
 class TradingAgentsRunner(Protocol):
@@ -25,6 +29,9 @@ class TradingAgentsAdapter:
 
     TradingAgents receives structured evidence and can only return an analysis
     decision. It is not given broker/order capabilities by this adapter.
+
+    When the runtime supplies position-sizing fields, those fields are carried
+    through for paper execution. Mechanical validation remains downstream.
     """
 
     def __init__(self, runner: TradingAgentsRunner | None = None) -> None:
@@ -48,11 +55,23 @@ class TradingAgentsAdapter:
                 "setup_state": signal.setup_state,
                 "reasons": list(signal.reasons),
             },
-            # Explicit fallback inputs let the runtime continue paper-testing
-            # when OpenAI/Gemini quotas or provider access are temporarily down.
             "deterministic_direction": signal.direction,
             "deterministic_score": signal.score,
-            "capabilities": {"market_data": True, "orders": False, "account_mutation": False},
+            "capabilities": {
+                "market_data": True,
+                "orders": False,
+                "account_mutation": False,
+                "position_sizing": True,
+            },
+            "requested_output": {
+                "decision": "BUY|SELL|WAIT",
+                "confidence": "0..1",
+                "quantity": "positive share quantity for BUY/SELL; required for a trade",
+                "entry_price": "planned entry price",
+                "stop_price": "protective stop price",
+                "target_price": "profit target price",
+                "rationale": "brief explanation",
+            },
         }
 
         if self.runner is None:
@@ -78,4 +97,26 @@ class TradingAgentsAdapter:
         confidence = max(0.0, min(1.0, float(result.get("confidence", 0.0))))
         rationale = str(result.get("rationale", "No rationale returned"))
         provider = str(result.get("provider", "tradingagents"))
-        return AITradeDecision(snapshot.symbol, decision, confidence, rationale, provider)
+
+        def _optional_float(key: str) -> float | None:
+            value = result.get(key)
+            if value is None or value == "":
+                return None
+            return float(value)
+
+        quantity = _optional_float("quantity")
+        entry_price = _optional_float("entry_price")
+        stop_price = _optional_float("stop_price")
+        target_price = _optional_float("target_price")
+
+        return AITradeDecision(
+            snapshot.symbol,
+            decision,
+            confidence,
+            rationale,
+            provider,
+            quantity=quantity,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            target_price=target_price,
+        )
