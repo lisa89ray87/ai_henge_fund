@@ -78,12 +78,8 @@ class TradingPipeline:
         try:
             entry, stop, target = self.risk_gate._trade_levels(snapshot, expected)
         except ValueError as exc:
-            return RiskDecision(
-                "WAIT", 0, None, str(exc), ("PAPER_RISK_BYPASS",),
-            )
+            return RiskDecision("WAIT", 0, None, str(exc), ("PAPER_RISK_BYPASS",))
 
-        # One share is deliberately used for paper-path testing. The workflow's
-        # separate session-level paper-trade limit remains authoritative.
         return RiskDecision(
             expected,
             1.0,
@@ -100,9 +96,6 @@ class TradingPipeline:
         ai = self.ai_adapter.analyze(snapshot, signal)
         settings = get_settings()
 
-        # During paper-only testing, do not let the future live-capital risk
-        # budget prevent us from exercising the complete paper-trade lifecycle.
-        # If live trading is ever enabled, the normal risk gate is mandatory.
         if not settings.moomoo_live_trading_enabled:
             risk = self._paper_test_decision(snapshot, signal, ai)
         else:
@@ -126,6 +119,14 @@ class TradingPipeline:
                     stop_price=risk.stop_price,
                     target_price=risk.target_price,
                 )
-            elif risk.action == "SELL" and existing.quantity > 0:
-                lifecycle = self._ensure_lifecycle().close_position(symbol=snapshot.symbol, price=float(snapshot.last_price))
+            else:
+                # A signal in the opposite direction closes the existing
+                # position; it does not silently reverse it in the same cycle.
+                # The next scan may open the new direction once flat.
+                existing_side = "BUY" if existing.quantity > 0 else "SELL"
+                if risk.action != existing_side:
+                    lifecycle = self._ensure_lifecycle().close_position(
+                        symbol=snapshot.symbol,
+                        price=float(snapshot.last_price),
+                    )
         return PipelineResult(signal.direction, ai.decision, risk, lifecycle)
