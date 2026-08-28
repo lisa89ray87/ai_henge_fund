@@ -51,7 +51,7 @@ class MoomooPaperTradeLifecycle:
         self.monitor.close()
 
     def reconcile_startup(self) -> int:
-        """Rebuild in-memory positions from Moomoo and persistent trade history."""
+        """Rebuild in-memory positions and restore both target orders and stop watchers."""
         broker_positions = self.execution.list_positions()
         broker_by_symbol = {row["symbol"]: row for row in broker_positions}
         working_orders = self.execution.list_open_orders()
@@ -93,10 +93,16 @@ class MoomooPaperTradeLifecycle:
                 if target_order_id:
                     self._target_orders[symbol] = target_order_id
 
-            if state.stop_price and not self._has_any_exit_order(working_orders, symbol, state.side):
+            # Always restore the stop watcher when a saved stop exists. A working
+            # target order protects the profit side, but it does not protect the
+            # loss side, so it must not suppress the stop watcher.
+            if state.stop_price and not self._has_active_stop_watcher(symbol):
                 self._start_exit_watcher(
-                    symbol, "BUY" if signed_qty > 0 else "SELL", int(abs(signed_qty)),
-                    state.stop_price, target_order_id,
+                    symbol,
+                    state.side,
+                    int(abs(signed_qty)),
+                    state.stop_price,
+                    target_order_id,
                 )
                 print(f"RECONCILE {symbol}: stop watcher restored @ ${state.stop_price:,.4f}")
 
@@ -218,6 +224,10 @@ class MoomooPaperTradeLifecycle:
         self._watchers[symbol] = (stop_event, thread)
         thread.start()
 
+    def _has_active_stop_watcher(self, symbol):
+        watcher = self._watchers.get(symbol)
+        return watcher is not None and watcher[1].is_alive() and not watcher[0].is_set()
+
     def _stop_watcher(self, symbol):
         watcher = self._watchers.pop(symbol, None)
         if watcher is not None:
@@ -302,9 +312,6 @@ class MoomooPaperTradeLifecycle:
         if self.telegram is not None:
             self.telegram.send_trade_event(symbol=trade.symbol, side=trade.side, quantity=trade.quantity, price=trade.price, event=event, order_id=trade.trade_id, stop_price=stop_price, target_price=target_price)
 
-    def _notify_text(self, message: str) -> None:
+    def _notify_text(self, message):
         if self.telegram is not None:
-            try:
-                self.telegram.send_text(message)
-            except Exception as exc:
-                print(f"TELEGRAM: notification failed: {exc}")
+            self.telegram.send_text(message)
