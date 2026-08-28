@@ -27,6 +27,7 @@ class TradingAgentsDecision:
     entry_price: float | None = None
     stop_price: float | None = None
     target_price: float | None = None
+    quantity_source: str | None = None
 
 
 class TradingAgentsRuntime(Protocol):
@@ -69,7 +70,12 @@ class TradingAgentsBridge:
 
 
 class TradingAgentsGraphRuntime:
-    """Production adapter around TauricResearch TradingAgentsGraph."""
+    """Production adapter around TauricResearch TradingAgentsGraph.
+
+    The graph remains responsible for the main BUY/SELL/HOLD analysis. Position
+    sizing is a separate provider-aware AI decision so a missing sizing field in
+    the graph's final decision cannot silently become a rejected paper trade.
+    """
 
     def __init__(self) -> None:
         try:
@@ -193,15 +199,9 @@ class TradingAgentsGraphRuntime:
         entry_price: float | None,
         stop_price: float | None,
         target_price: float | None,
-    ) -> int | None:
-        """Ask the same configured TradingAgents LLM for the share quantity.
-
-        TradingAgentsGraph's final decision is primarily BUY/SELL/HOLD and does
-        not guarantee a sizing field. We therefore make sizing an explicit AI
-        sub-decision using the graph's configured quick-thinking model. This is
-        still AI-controlled; no capital-budget formula or fixed share fallback
-        is used in paper mode.
-        """
+        provider: str,
+    ) -> tuple[int, str]:
+        """Ask one configured provider for the share quantity."""
         symbol = str(request["symbol"]).strip().upper()
         deterministic_direction = str(request.get("deterministic_direction", "NEUTRAL"))
         deterministic_score = request.get("deterministic_score", 0)
@@ -210,12 +210,11 @@ You are the position-sizing component of an AI day-trading research system.
 Choose the number of whole US stock shares for this PAPER/SIMULATE trade.
 
 The quantity must be an explicit AI decision. Do NOT calculate it from account
-capital, maximum deployed capital, daily loss limits, or a fixed one-share
-fallback. Those constraints are intentionally disabled in paper simulation.
-Use conviction, deterministic signal strength, stop distance, target distance,
-and the quality of the setup to choose a sensible whole-share quantity.
+capital, maximum deployed capital, daily loss limits, or a fixed one-share fallback.
+Those constraints are intentionally disabled in paper simulation. Use conviction,
+deterministic signal strength, stop distance, target distance, and setup quality.
 
-Return ONLY valid JSON with exactly:
+Return ONLY valid JSON:
 {{"quantity": <positive integer>, "reason": "brief sizing rationale"}}
 
 Symbol: {symbol}
@@ -227,20 +226,65 @@ Stop: {stop_price}
 Target: {target_price}
 """.strip()
 
+        print(f"AI POSITION SIZE REQUEST {symbol}: provider={provider} action={action}")
         response = graph.quick_thinking_llm.invoke(prompt)
         parsed = self._parse_json_object(self._response_text(response), symbol)
         quantity = self._optional_float(parsed.get("quantity"))
         if quantity is None or quantity <= 0 or not quantity.is_integer():
-            print(
-                f"AI POSITION SIZE INVALID {symbol}: "
-                f"quantity={parsed.get('quantity')!r} reason={parsed.get('reason', '')}"
+            raise RuntimeError(
+                f"AI position sizing returned invalid quantity for {symbol}: "
+                f"{parsed.get('quantity')!r} reason={parsed.get('reason', '')}"
             )
-            return None
         print(
-            f"AI POSITION SIZE {symbol}: quantity={int(quantity)} "
+            f"AI POSITION SIZE {symbol}: quantity={int(quantity)} provider={provider} "
             f"reason={parsed.get('reason', '')}"
         )
-        return int(quantity)
+        return int(quantity), f"ai-{provider}"
+
+    def _size_with_fallbacks(
+        self,
+        request: dict[str, Any],
+        action: str,
+        entry_price: float | None,
+        stop_price: float | None,
+        target_price: float | None,
+        primary_provider: str,
+    ) -> tuple[int, str]:
+        """Use primary AI, then the other configured AI provider, then 1-share fallback."""
+        providers: list[str] = [primary_provider]
+        if primary_provider == "openai" and self._has_gemini_key():
+            providers.append("google_genai")
+        elif primary_provider == "google_genai" and self._has_key("OPENAI_API_KEY"):
+            providers.append("openai")
+
+        last_provider_error: Exception | None = None
+        for provider in providers:
+            try:
+                graph = self._build_graph(provider)
+                return self._request_ai_position_size(
+                    graph,
+                    request,
+                    action,
+                    entry_price,
+                    stop_price,
+                    target_price,
+                    provider,
+                )
+            except Exception as exc:
+                if not self._is_provider_failure(exc):
+                    raise
+                last_provider_error = exc
+                print(
+                    f"AI POSITION SIZE provider failed: provider={provider}; "
+                    f"symbol={request['symbol']}; reason={exc}"
+                )
+
+        reason = str(last_provider_error) if last_provider_error else "no AI sizing provider available"
+        print(
+            f"AI POSITION SIZE FALLBACK {request['symbol']}: quantity=1 "
+            f"source=deterministic-fallback reason={reason}"
+        )
+        return 1, "deterministic-fallback"
 
     @classmethod
     def _normalize_decision(
@@ -303,6 +347,8 @@ Target: {target_price}
             confidence=confidence,
             rationale=f"AI provider unavailable; deterministic fallback used. {reason}",
             provider="deterministic-fallback",
+            quantity=1 if action in {"BUY", "SELL"} else None,
+            quantity_source="deterministic-fallback" if action in {"BUY", "SELL"} else None,
         )
 
     def _run(self, provider: str, request: dict[str, Any]) -> TradingAgentsDecision:
@@ -314,16 +360,18 @@ Target: {target_price}
         graph = self._build_graph(provider)
         _, raw_decision = graph.propagate(tradingagents_symbol, analysis_date)
         action, confidence, rationale, quantity, entry_price, stop_price, target_price = self._normalize_decision(raw_decision, symbol)
+        quantity_source = f"ai-{provider}" if quantity is not None else None
 
         if action in {"BUY", "SELL"} and quantity is None:
-            quantity = self._request_ai_position_size(
-                graph,
+            quantity, quantity_source = self._size_with_fallbacks(
                 request,
                 action,
                 entry_price,
                 stop_price,
                 target_price,
+                provider,
             )
+            rationale = f"{rationale} | Position sizing source: {quantity_source}"
 
         return TradingAgentsDecision(
             action=action,
@@ -334,6 +382,7 @@ Target: {target_price}
             entry_price=entry_price,
             stop_price=stop_price,
             target_price=target_price,
+            quantity_source=quantity_source,
         )
 
     def analyze(self, request: dict[str, Any]) -> TradingAgentsDecision:
