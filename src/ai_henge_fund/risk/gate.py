@@ -22,7 +22,12 @@ class RiskDecision:
 
 
 class RiskGate:
-    """Fail-closed gate between AI analysis and paper execution."""
+    """Gate between AI analysis and execution.
+
+    Paper/SIMULATE mode validates trade structure and AI sizing but deliberately
+    ignores live capital-budget constraints. Live mode enforces the configured
+    capital, per-trade risk, daily-loss, and position limits.
+    """
 
     def __init__(
         self,
@@ -49,10 +54,11 @@ class RiskGate:
         self.min_ai_confidence = min_ai_confidence
         self.allowed_market_states = frozenset(allowed_market_states)
         self.reward_risk_multiple = reward_risk_multiple
+        self.paper_mode = bool(settings.moomoo_paper_trading_enabled and not settings.moomoo_live_trading_enabled)
 
     @staticmethod
     def _trade_levels(snapshot: SignalSnapshot, direction: str) -> tuple[float, float, float]:
-        """Build a deterministic entry/stop/target plan from recent candles."""
+        """Build deterministic levels when AI/fallback did not provide them."""
         entry = float(snapshot.last_price)
         candles = snapshot.candles[-5:]
         lows = [float(c["low"]) for c in candles if c.get("low") is not None]
@@ -71,6 +77,21 @@ class RiskGate:
             if stop <= entry:
                 raise ValueError("SHORT stop is not above entry")
             target = entry - (stop - entry) * 2.0
+        return entry, stop, target
+
+    @staticmethod
+    def _validate_ai_levels(ai: AITradeDecision, expected: str) -> tuple[float, float, float] | None:
+        if ai.entry_price is None or ai.stop_price is None or ai.target_price is None:
+            return None
+        entry = float(ai.entry_price)
+        stop = float(ai.stop_price)
+        target = float(ai.target_price)
+        if min(entry, stop, target) <= 0:
+            raise ValueError("AI returned a non-positive trade level")
+        if expected == "BUY" and not (stop < entry < target):
+            raise ValueError("AI LONG levels must satisfy stop < entry < target")
+        if expected == "SELL" and not (target < entry < stop):
+            raise ValueError("AI SHORT levels must satisfy target < entry < stop")
         return entry, stop, target
 
     def evaluate(
@@ -114,6 +135,57 @@ class RiskGate:
             return RiskDecision("WAIT", 0, None, "Maximum simultaneous position limit reached", tuple(checks))
         checks.append("POSITION_COUNT")
 
+        try:
+            ai_levels = self._validate_ai_levels(ai, expected)
+        except ValueError as exc:
+            return RiskDecision("WAIT", 0, None, str(exc), tuple(checks))
+
+        if ai_levels is not None:
+            entry, stop, target = ai_levels
+            checks.append("AI_TRADE_LEVELS")
+        else:
+            try:
+                entry, stop, target = self._trade_levels(snapshot, expected)
+            except ValueError as exc:
+                return RiskDecision("WAIT", 0, None, str(exc), tuple(checks))
+            checks.append("TRADE_LEVELS_FALLBACK")
+
+        risk_per_share = abs(entry - stop)
+        if risk_per_share <= 0:
+            return RiskDecision("WAIT", 0, None, "Invalid trade risk distance", tuple(checks))
+
+        # AI sizing is authoritative in both paper and live modes. A missing,
+        # non-integral, or non-positive AI quantity is never silently replaced.
+        if ai.quantity is None:
+            return RiskDecision(
+                "WAIT", 0, risk_per_share,
+                "AI did not provide a valid position size",
+                tuple(checks), entry_price=entry, stop_price=stop, target_price=target,
+            )
+        raw_quantity = float(ai.quantity)
+        if raw_quantity <= 0 or not raw_quantity.is_integer():
+            return RiskDecision(
+                "WAIT", 0, risk_per_share,
+                "AI did not provide a valid whole-share position size",
+                tuple(checks), entry_price=entry, stop_price=stop, target_price=target,
+            )
+        ai_quantity = int(raw_quantity)
+        checks.append("AI_POSITION_SIZE")
+
+        if self.paper_mode:
+            # Simulation is for strategy/execution testing. Do not constrain it
+            # using the future live account's $100/$90/$10 capital budgets.
+            checks.append("PAPER_CAPITAL_LIMITS_BYPASSED")
+            return RiskDecision(
+                expected,
+                float(ai_quantity),
+                risk_per_share,
+                "Paper trade accepted using AI position size; live capital limits bypassed",
+                tuple(checks),
+                entry_price=entry, stop_price=stop, target_price=target,
+            )
+
+        # Live-only capital/risk controls.
         if daily_realized_loss >= self.max_daily_loss:
             return RiskDecision("WAIT", 0, None, "Maximum daily loss limit reached", tuple(checks))
         checks.append("DAILY_LOSS")
@@ -123,40 +195,34 @@ class RiskGate:
             return RiskDecision("WAIT", 0, None, "Maximum deployed capital reached", tuple(checks))
         checks.append("DEPLOYED_CAPITAL")
 
-        try:
-            entry, stop, target = self._trade_levels(snapshot, expected)
-        except ValueError as exc:
-            return RiskDecision("WAIT", 0, None, str(exc), tuple(checks))
-        risk_per_share = abs(entry - stop)
-        if risk_per_share <= 0:
-            return RiskDecision("WAIT", 0, None, "Invalid trade risk distance", tuple(checks))
-        checks.append("TRADE_LEVELS")
-
-        # The configured risk-per-trade percentage is a ceiling. The hard daily
-        # loss limit is also applied to each new trade so a single order cannot
-        # exceed the entire daily loss budget.
         configured_trade_risk = self.starting_capital * self.risk_per_trade_pct / 100.0
         remaining_daily_loss = max(0.0, self.max_daily_loss - max(0.0, daily_realized_loss))
         allowed_trade_risk = min(configured_trade_risk, remaining_daily_loss)
         if allowed_trade_risk <= 0:
             return RiskDecision("WAIT", 0, None, "No daily risk budget remains", tuple(checks))
 
-        quantity_by_capital = int(available_deployment // entry)
-        quantity_by_risk = int(allowed_trade_risk // risk_per_share)
-        quantity = min(quantity_by_capital, quantity_by_risk)
-        if quantity <= 0:
+        capital_required = ai_quantity * entry
+        risk_required = ai_quantity * risk_per_share
+        if capital_required > available_deployment:
             return RiskDecision(
-                "WAIT", 0, None,
-                "Position size cannot satisfy capital and risk limits", tuple(checks),
+                "WAIT", 0, risk_per_share,
+                "AI position size exceeds live capital limit", tuple(checks),
                 entry_price=entry, stop_price=stop, target_price=target,
             )
+        if risk_required > allowed_trade_risk:
+            return RiskDecision(
+                "WAIT", 0, risk_per_share,
+                "AI position size exceeds live risk limit", tuple(checks),
+                entry_price=entry, stop_price=stop, target_price=target,
+            )
+        checks.append("LIVE_CAPITAL_LIMIT")
+        checks.append("LIVE_RISK_LIMIT")
 
-        checks.append("POSITION_SIZE")
         return RiskDecision(
             expected,
-            float(quantity),
+            float(ai_quantity),
             risk_per_share,
-            "All risk gates passed",
+            "All live risk gates passed using AI position size",
             tuple(checks),
             entry_price=entry,
             stop_price=stop,
