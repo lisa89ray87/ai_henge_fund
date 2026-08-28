@@ -153,6 +153,95 @@ class TradingAgentsGraphRuntime:
         except (TypeError, ValueError):
             return None
 
+    @staticmethod
+    def _response_text(response: Any) -> str:
+        content = getattr(response, "content", response)
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict) and item.get("text"):
+                    parts.append(str(item["text"]))
+            return "".join(parts).strip()
+        return str(content).strip()
+
+    @classmethod
+    def _parse_json_object(cls, text: str, symbol: str) -> dict[str, Any]:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            cleaned = cleaned.strip("`")
+            if cleaned.lower().startswith("json"):
+                cleaned = cleaned[4:].strip()
+        try:
+            value = json.loads(cleaned)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(
+                f"AI position sizing returned invalid JSON for {symbol}: {cleaned[:240]}"
+            ) from exc
+        if not isinstance(value, dict):
+            raise RuntimeError(f"AI position sizing returned a non-object response for {symbol}")
+        return value
+
+    def _request_ai_position_size(
+        self,
+        graph: Any,
+        request: dict[str, Any],
+        action: str,
+        entry_price: float | None,
+        stop_price: float | None,
+        target_price: float | None,
+    ) -> int | None:
+        """Ask the same configured TradingAgents LLM for the share quantity.
+
+        TradingAgentsGraph's final decision is primarily BUY/SELL/HOLD and does
+        not guarantee a sizing field. We therefore make sizing an explicit AI
+        sub-decision using the graph's configured quick-thinking model. This is
+        still AI-controlled; no capital-budget formula or fixed share fallback
+        is used in paper mode.
+        """
+        symbol = str(request["symbol"]).strip().upper()
+        deterministic_direction = str(request.get("deterministic_direction", "NEUTRAL"))
+        deterministic_score = request.get("deterministic_score", 0)
+        prompt = f"""
+You are the position-sizing component of an AI day-trading research system.
+Choose the number of whole US stock shares for this PAPER/SIMULATE trade.
+
+The quantity must be an explicit AI decision. Do NOT calculate it from account
+capital, maximum deployed capital, daily loss limits, or a fixed one-share
+fallback. Those constraints are intentionally disabled in paper simulation.
+Use conviction, deterministic signal strength, stop distance, target distance,
+and the quality of the setup to choose a sensible whole-share quantity.
+
+Return ONLY valid JSON with exactly:
+{{"quantity": <positive integer>, "reason": "brief sizing rationale"}}
+
+Symbol: {symbol}
+Action: {action}
+Deterministic direction: {deterministic_direction}
+Deterministic score: {deterministic_score}
+Entry: {entry_price}
+Stop: {stop_price}
+Target: {target_price}
+""".strip()
+
+        response = graph.quick_thinking_llm.invoke(prompt)
+        parsed = self._parse_json_object(self._response_text(response), symbol)
+        quantity = self._optional_float(parsed.get("quantity"))
+        if quantity is None or quantity <= 0 or not quantity.is_integer():
+            print(
+                f"AI POSITION SIZE INVALID {symbol}: "
+                f"quantity={parsed.get('quantity')!r} reason={parsed.get('reason', '')}"
+            )
+            return None
+        print(
+            f"AI POSITION SIZE {symbol}: quantity={int(quantity)} "
+            f"reason={parsed.get('reason', '')}"
+        )
+        return int(quantity)
+
     @classmethod
     def _normalize_decision(
         cls, raw_decision: Any, symbol: str
@@ -222,8 +311,19 @@ class TradingAgentsGraphRuntime:
         generated_at = request.get("generated_at")
         analysis_date = datetime.fromisoformat(str(generated_at)).date().isoformat() if generated_at else datetime.now().date().isoformat()
 
-        _, raw_decision = self._build_graph(provider).propagate(tradingagents_symbol, analysis_date)
+        graph = self._build_graph(provider)
+        _, raw_decision = graph.propagate(tradingagents_symbol, analysis_date)
         action, confidence, rationale, quantity, entry_price, stop_price, target_price = self._normalize_decision(raw_decision, symbol)
+
+        if action in {"BUY", "SELL"} and quantity is None:
+            quantity = self._request_ai_position_size(
+                graph,
+                request,
+                action,
+                entry_price,
+                stop_price,
+                target_price,
+            )
 
         return TradingAgentsDecision(
             action=action,
