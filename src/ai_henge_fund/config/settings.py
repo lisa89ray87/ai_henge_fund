@@ -51,6 +51,14 @@ class AppSettings(BaseSettings):
     moomoo_live_trading_enabled: bool = False
     moomoo_paper_fill_timeout_seconds: int = 30
 
+    # AI Henge Fund capital / risk budget. These limits apply to the dedicated
+    # strategy allocation, not to the user's entire Moomoo account balance.
+    ai_henge_fund_starting_capital: float = 100.0
+    ai_henge_fund_max_capital_deployed: float = 90.0
+    ai_henge_fund_risk_per_trade_pct: float = 50.0
+    ai_henge_fund_max_positions: int = 0  # 0 = no fixed count limit
+    ai_henge_fund_max_daily_loss: float = 10.0
+
     # Streamlit
     streamlit_server_port: int = 8501
 
@@ -81,6 +89,19 @@ class AppSettings(BaseSettings):
 
         if self.moomoo_paper_fill_timeout_seconds < 1:
             raise ValueError("MOOMOO_PAPER_FILL_TIMEOUT_SECONDS must be at least 1 second.")
+
+        if self.ai_henge_fund_starting_capital <= 0:
+            raise ValueError("AI_HEDGE_FUND_STARTING_CAPITAL must be greater than zero.")
+        if self.ai_henge_fund_max_capital_deployed <= 0:
+            raise ValueError("AI_HEDGE_FUND_MAX_CAPITAL_DEPLOYED must be greater than zero.")
+        if self.ai_henge_fund_max_capital_deployed > self.ai_henge_fund_starting_capital:
+            raise ValueError("AI_HEDGE_FUND_MAX_CAPITAL_DEPLOYED cannot exceed starting capital.")
+        if not 0 <= self.ai_henge_fund_risk_per_trade_pct <= 100:
+            raise ValueError("AI_HEDGE_FUND_RISK_PER_TRADE_PCT must be between 0 and 100.")
+        if self.ai_henge_fund_max_positions < 0:
+            raise ValueError("AI_HEDGE_FUND_MAX_POSITIONS must be zero or greater.")
+        if self.ai_henge_fund_max_daily_loss <= 0:
+            raise ValueError("AI_HEDGE_FUND_MAX_DAILY_LOSS must be greater than zero.")
 
         return self
 
