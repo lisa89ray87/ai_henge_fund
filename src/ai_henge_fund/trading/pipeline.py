@@ -62,16 +62,58 @@ class TradingPipeline:
         """Calculate current strategy deployment from reconstructed paper positions."""
         return sum(abs(position.quantity) * position.average_price for position in self.positions.all())
 
+    def _paper_test_decision(self, snapshot: SignalSnapshot, signal, ai) -> RiskDecision:
+        """Build an execution decision without applying the live-capital risk gate.
+
+        Paper-only mode intentionally exercises the signal -> order -> protection
+        path without the live capital/risk budget blocking the test. Live trading
+        remains fail-closed by project safety policy.
+        """
+        expected = "BUY" if signal.direction == "LONG" else "SELL" if signal.direction == "SHORT" else "WAIT"
+        if ai.decision != expected or expected == "WAIT":
+            return RiskDecision(
+                "WAIT", 0, None, "AI decision does not confirm a tradable deterministic direction", ("PAPER_RISK_BYPASS",),
+            )
+
+        try:
+            entry, stop, target = self.risk_gate._trade_levels(snapshot, expected)
+        except ValueError as exc:
+            return RiskDecision(
+                "WAIT", 0, None, str(exc), ("PAPER_RISK_BYPASS",),
+            )
+
+        # One share is deliberately used for paper-path testing. The workflow's
+        # separate session-level paper-trade limit remains authoritative.
+        return RiskDecision(
+            expected,
+            1.0,
+            abs(entry - stop),
+            "Paper-only mode: capital risk gate bypassed",
+            ("PAPER_RISK_BYPASS",),
+            entry_price=entry,
+            stop_price=stop,
+            target_price=target,
+        )
+
     def evaluate(self, snapshot: SignalSnapshot, *, execute_paper: bool = True) -> PipelineResult:
         signal = self.signal_engine.evaluate(snapshot)
         ai = self.ai_adapter.analyze(snapshot, signal)
-        risk = self.risk_gate.evaluate(
-            snapshot,
-            signal,
-            ai,
-            deployed_capital=self._deployed_capital(),
-            open_position_count=len(self.positions.all()),
-        )
+        settings = get_settings()
+
+        # During paper-only testing, do not let the future live-capital risk
+        # budget prevent us from exercising the complete paper-trade lifecycle.
+        # If live trading is ever enabled, the normal risk gate is mandatory.
+        if not settings.moomoo_live_trading_enabled:
+            risk = self._paper_test_decision(snapshot, signal, ai)
+        else:
+            risk = self.risk_gate.evaluate(
+                snapshot,
+                signal,
+                ai,
+                deployed_capital=self._deployed_capital(),
+                open_position_count=len(self.positions.all()),
+            )
+
         lifecycle = None
         if execute_paper and risk.action in {"BUY", "SELL"} and risk.quantity > 0:
             existing = self.positions.get(snapshot.symbol)
