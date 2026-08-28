@@ -135,7 +135,13 @@ class TradingPipeline:
             target_price=target,
         )
 
-    def evaluate(self, snapshot: SignalSnapshot, *, execute_paper: bool = True) -> PipelineResult:
+    def analyze(self, snapshot: SignalSnapshot) -> PipelineResult:
+        """Run signal + AI + risk evaluation without placing a paper order.
+
+        This separation is intentional: the AI call can be time-bounded by the
+        session runner without allowing a late-returning AI thread to submit an
+        order after its timeout has already been reported.
+        """
         signal = self.signal_engine.evaluate(snapshot)
         ai = self.ai_adapter.analyze(snapshot, signal)
         settings = get_settings()
@@ -151,23 +157,43 @@ class TradingPipeline:
                 open_position_count=len(self.positions.all()),
             )
 
+        return PipelineResult(signal.direction, ai.decision, risk, None)
+
+    def execute_paper_result(self, snapshot: SignalSnapshot, result: PipelineResult) -> PipelineResult:
+        """Execute an already-completed, validated paper decision.
+
+        Kept separate from ``analyze`` so a timed-out AI analysis cannot place a
+        paper order after the runner has moved on.
+        """
         lifecycle = None
-        if execute_paper and risk.action in {"BUY", "SELL"} and risk.quantity > 0:
+        if result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
             existing = self.positions.get(snapshot.symbol)
             if existing is None:
                 lifecycle = self._ensure_lifecycle().open(
                     symbol=snapshot.symbol,
-                    side=risk.action,
-                    quantity=risk.quantity,
-                    price=risk.entry_price or float(snapshot.last_price),
-                    stop_price=risk.stop_price,
-                    target_price=risk.target_price,
+                    side=result.risk.action,
+                    quantity=result.risk.quantity,
+                    price=result.risk.entry_price or float(snapshot.last_price),
+                    stop_price=result.risk.stop_price,
+                    target_price=result.risk.target_price,
                 )
             else:
                 existing_side = "BUY" if existing.quantity > 0 else "SELL"
-                if risk.action != existing_side:
+                if result.risk.action != existing_side:
                     lifecycle = self._ensure_lifecycle().close_position(
                         symbol=snapshot.symbol,
                         price=float(snapshot.last_price),
                     )
-        return PipelineResult(signal.direction, ai.decision, risk, lifecycle)
+        return PipelineResult(
+            result.deterministic_direction,
+            result.ai_decision,
+            result.risk,
+            lifecycle,
+        )
+
+    def evaluate(self, snapshot: SignalSnapshot, *, execute_paper: bool = True) -> PipelineResult:
+        """Backward-compatible combined analysis and optional paper execution."""
+        result = self.analyze(snapshot)
+        if execute_paper:
+            return self.execute_paper_result(snapshot, result)
+        return result
