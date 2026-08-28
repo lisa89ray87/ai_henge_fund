@@ -26,7 +26,20 @@ class GraphRunner:
         action = decision.action.lower()
         mapped = {"buy": "BUY", "sell": "SELL", "hold": "WAIT"}.get(action, "WAIT")
         confidence = 0.0 if decision.confidence is None else decision.confidence
-        return {"decision": mapped, "confidence": confidence, "rationale": decision.rationale, "provider": decision.provider}
+        result = {
+            "decision": mapped,
+            "confidence": confidence,
+            "rationale": decision.rationale,
+            "provider": decision.provider,
+        }
+        # Preserve AI position-sizing and trade-level fields returned by the
+        # TradingAgents runtime. The previous runner dropped these fields,
+        # causing the downstream paper-sizing validator to see quantity=None.
+        for key in ("quantity", "entry_price", "stop_price", "target_price"):
+            value = getattr(decision, key, None)
+            if value is not None:
+                result[key] = value
+        return result
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -60,19 +73,14 @@ def _session_close(now: datetime) -> datetime:
 
 
 def _analyze_with_timeout(pipeline: TradingPipeline, snapshot, timeout_seconds: float) -> tuple[PipelineResult | None, str | None]:
-    """Run analysis in a daemon thread so a hung provider cannot block the session loop.
-
-    The worker only performs analysis/risk evaluation. Paper execution is deliberately
-    performed by the main thread after a successful return, so a late provider response
-    cannot submit an order after the timeout has been reported.
-    """
+    """Run analysis in a daemon thread so a hung provider cannot block the session loop."""
     result: dict[str, PipelineResult] = {}
     error: dict[str, Exception] = {}
 
     def worker() -> None:
         try:
             result["value"] = pipeline.analyze(snapshot)
-        except Exception as exc:  # pragma: no cover - exercised by provider/runtime failures
+        except Exception as exc:
             error["value"] = exc
 
     started = time.monotonic()
