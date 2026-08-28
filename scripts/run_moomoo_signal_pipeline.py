@@ -39,6 +39,13 @@ def _int_env(name: str, default: int) -> int:
         return default
 
 
+def _float_env(name: str, default: float) -> float:
+    try:
+        return max(0.0, float(os.getenv(name, str(default))))
+    except ValueError:
+        return default
+
+
 def _session_now() -> datetime:
     return datetime.now(ZoneInfo("America/New_York"))
 
@@ -51,7 +58,7 @@ def _session_close(now: datetime) -> datetime:
     return now.replace(hour=16, minute=0, second=0, microsecond=0)
 
 
-def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades) -> int:
+def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds) -> int:
     snapshots = []
     cycle_market_state = None
     for symbol in universe:
@@ -68,6 +75,8 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                 snapshots.append((snapshot, signal))
         except Exception as exc:
             print(f"SCAN {symbol}: SKIP ({exc})")
+        if scan_delay_seconds > 0:
+            time.sleep(scan_delay_seconds)
 
     snapshots.sort(key=lambda item: abs(item[1].score), reverse=True)
     candidates = snapshots[:max_ai_candidates]
@@ -129,6 +138,7 @@ def main() -> int:
     max_paper_trades = _int_env("MOOMOO_SIGNAL_MAX_PAPER_TRADES", 1)
     session_loop = _truthy("SESSION_RUN_UNTIL_CLOSE", "true")
     cycle_minutes = _int_env("MOOMOO_SIGNAL_CYCLE_MINUTES", 20)
+    scan_delay_seconds = _float_env("MOOMOO_SIGNAL_SCAN_DELAY_SECONDS", 3.2)
 
     print("=" * 72)
     print("AI Henge Fund - Moomoo OpenD Universe Signal Pipeline")
@@ -139,6 +149,7 @@ def main() -> int:
     print(f"Paper trades    : max {max_paper_trades} per session")
     print(f"Session mode    : {'UNTIL U.S. CLOSE' if session_loop else 'SINGLE CYCLE'}")
     print(f"Cycle interval  : {cycle_minutes} minutes")
+    print(f"Scan throttle   : {scan_delay_seconds:.1f}s between symbols")
     print(f"Paper execution : {'ENABLED' if execute_paper else 'DISABLED (analysis only)'}")
     print("Live trading    : DISABLED")
 
@@ -156,7 +167,7 @@ def main() -> int:
             now = _session_now()
             if not session_loop:
                 pipeline.resume_paper_session()
-                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades)
+                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds)
                 pipeline.handoff_paper_session()
                 break
             if now.weekday() >= 5:
@@ -180,7 +191,7 @@ def main() -> int:
             if paper_trades >= max_paper_trades:
                 print("Paper-trade session limit reached; continuing market monitoring without new orders.")
             else:
-                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades)
+                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds)
             now = _session_now()
             if now >= _session_close(now):
                 pipeline.handoff_paper_session()
