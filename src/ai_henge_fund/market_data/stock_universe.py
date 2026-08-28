@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import os
 
-# Broad cross-exchange universe: high-liquidity names plus stocks that commonly
-# exhibit meaningful intraday movement. This is intentionally broader than a
-# Nasdaq-only technology list while remaining small enough for OpenD scanning.
+# Cross-exchange universe covering Nasdaq and NYSE names with strong liquidity
+# and frequent intraday movement. The deterministic scanner ranks setups after
+# market-data collection; explicit environment overrides remain supported.
 DEFAULT_US_STOCK_UNIVERSE = (
     "US.NVDA", "US.AMD", "US.INTC", "US.AAPL", "US.MSFT", "US.AMZN", "US.META", "US.TSLA",
     "US.GOOGL", "US.AVGO", "US.MU", "US.SNDK", "US.PLTR", "US.DDOG", "US.CRWD", "US.ARM",
-    "US.QCOM", "US.SMCI", "US.NFLX", "US.NOK",
-    "US.MSTR", "US.COIN", "US.MARA", "US.RIOT", "US.TSM", "US.BABA", "US.PDD", "US.TCEHY",
-    "US.XOM", "US.CVX", "US.JPM", "US.BAC", "US.WFC", "US.C", "US.GS", "US.MS",
-    "US.UBER", "US.LYFT", "US.ABK", "US.RIVN", "US.LCID", "US.NIO", "US.BA", "US.GE",
-    "US.CAT", "US.DE", "US.CRM", "US.ORCL", "US.ADBE", "US.PYPL", "US.SQ", "US.SOFI",
-    "US.TTD", "US.TXN", "US.MRVL", "US.TSM", "US.TGT", "US.WMT", "US.COST", "US.DIS",
+    "US.QCOM", "US.SMCI", "US.NFLX", "US.NOK", "US.MSTR", "US.COIN", "US.MARA", "US.RIOT",
+    "US.TSM", "US.BABA", "US.PDD", "US.TCEHY", "US.XOM", "US.CVX", "US.JPM", "US.BAC",
+    "US.WFC", "US.C", "US.GS", "US.MS", "US.UBER", "US.LYFT", "US.RIVN", "US.LCID",
+    "US.NIO", "US.BA", "US.GE", "US.CAT", "US.DE", "US.CRM", "US.ORCL", "US.ADBE",
+    "US.PYPL", "US.SQ", "US.SOFI", "US.TTD", "US.TXN", "US.MRVL", "US.TGT", "US.WMT",
+    "US.COST", "US.DIS",
 )
 
 
