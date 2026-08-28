@@ -58,10 +58,20 @@ class TradingPipeline:
             self._lifecycle.close()
             self._lifecycle = None
 
+    def _deployed_capital(self) -> float:
+        """Calculate current strategy deployment from reconstructed paper positions."""
+        return sum(abs(position.quantity) * position.average_price for position in self.positions.all())
+
     def evaluate(self, snapshot: SignalSnapshot, *, execute_paper: bool = True) -> PipelineResult:
         signal = self.signal_engine.evaluate(snapshot)
         ai = self.ai_adapter.analyze(snapshot, signal)
-        risk = self.risk_gate.evaluate(snapshot, signal, ai)
+        risk = self.risk_gate.evaluate(
+            snapshot,
+            signal,
+            ai,
+            deployed_capital=self._deployed_capital(),
+            open_position_count=len(self.positions.all()),
+        )
         lifecycle = None
         if execute_paper and risk.action in {"BUY", "SELL"} and risk.quantity > 0:
             existing = self.positions.get(snapshot.symbol)
