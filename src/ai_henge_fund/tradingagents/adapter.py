@@ -18,6 +18,7 @@ class AITradeDecision:
     entry_price: float | None = None
     stop_price: float | None = None
     target_price: float | None = None
+    quantity_source: str | None = None
 
 
 class TradingAgentsRunner(Protocol):
@@ -25,16 +26,7 @@ class TradingAgentsRunner(Protocol):
 
 
 class TradingAgentsAdapter:
-    """Safe boundary between deterministic signals and TradingAgents.
-
-    TradingAgents receives structured evidence and can only return an analysis
-    decision. It is not given broker/order capabilities by this adapter.
-
-    For BUY/SELL decisions, position size is an explicit AI output. If the
-    first analysis omits quantity, the adapter makes a dedicated AI sizing
-    request through the same runner before allowing the decision downstream.
-    Paper mode does not substitute a quantity from capital/risk settings.
-    """
+    """Safe boundary between deterministic signals and TradingAgents."""
 
     def __init__(self, runner: TradingAgentsRunner | None = None) -> None:
         self.runner = runner
@@ -50,61 +42,6 @@ class TradingAgentsAdapter:
             except (TypeError, ValueError):
                 return None
         return None
-
-    def _request_ai_position_size(
-        self,
-        *,
-        snapshot: SignalSnapshot,
-        signal: DeterministicSignal,
-        decision: str,
-        entry_price: float | None,
-        stop_price: float | None,
-        target_price: float | None,
-        base_rationale: str,
-    ) -> dict[str, Any]:
-        if self.runner is None:
-            return {}
-
-        sizing_payload = {
-            "task": "POSITION_SIZING_ONLY",
-            "symbol": snapshot.symbol,
-            "market": snapshot.to_dict(),
-            "deterministic_signal": {
-                "direction": signal.direction,
-                "score": signal.score,
-                "trend": signal.trend,
-                "momentum": signal.momentum,
-                "price_action": signal.price_action,
-                "volume_confirmation": signal.volume_confirmation,
-                "market_alignment": signal.market_alignment,
-                "setup_state": signal.setup_state,
-                "reasons": list(signal.reasons),
-            },
-            "trade": {
-                "decision": decision,
-                "entry_price": entry_price,
-                "stop_price": stop_price,
-                "target_price": target_price,
-            },
-            "context": {"prior_rationale": base_rationale},
-            "capabilities": {
-                "market_data": True,
-                "orders": False,
-                "account_mutation": False,
-                "position_sizing": True,
-            },
-            "requested_output": {
-                "quantity": "REQUIRED positive whole-number share quantity",
-                "reason": "brief sizing rationale",
-            },
-            "rules": [
-                "Return quantity as a positive whole number of shares.",
-                "Do not use or request broker/account mutation capabilities.",
-                "Do not use future live capital limits to reduce paper-trading size.",
-                "Do not omit quantity when decision is BUY or SELL.",
-            ],
-        }
-        return self.runner.analyze(sizing_payload)
 
     def analyze(self, snapshot: SignalSnapshot, signal: DeterministicSignal) -> AITradeDecision:
         if not snapshot.is_usable:
@@ -144,19 +81,17 @@ class TradingAgentsAdapter:
         }
 
         if self.runner is None:
-            fallback_decision = {
-                "LONG": "BUY",
-                "SHORT": "SELL",
-                "NEUTRAL": "WAIT",
-            }.get(signal.direction, "WAIT")
+            fallback_decision = {"LONG": "BUY", "SHORT": "SELL", "NEUTRAL": "WAIT"}.get(signal.direction, "WAIT")
             fallback_confidence = min(1.0, abs(signal.score) / 8.0)
-
+            quantity = 1.0 if fallback_decision in {"BUY", "SELL"} else None
             return AITradeDecision(
                 snapshot.symbol,
                 fallback_decision,
                 fallback_confidence,
                 "TradingAgents runner not configured; deterministic fallback used",
                 "deterministic-fallback",
+                quantity=quantity,
+                quantity_source="deterministic-fallback" if quantity is not None else None,
             )
 
         result = self.runner.analyze(payload)
@@ -171,32 +106,7 @@ class TradingAgentsAdapter:
         entry_price = self._optional_float(result, "entry_price", "entry")
         stop_price = self._optional_float(result, "stop_price", "stop")
         target_price = self._optional_float(result, "target_price", "target")
-
-        # A trade must have an AI-controlled size. If the first model response
-        # omitted it, explicitly ask the same AI runner for sizing rather than
-        # silently substituting a deterministic or capital-derived quantity.
-        if decision in {"BUY", "SELL"} and quantity is None:
-            sizing_result = self._request_ai_position_size(
-                snapshot=snapshot,
-                signal=signal,
-                decision=decision,
-                entry_price=entry_price,
-                stop_price=stop_price,
-                target_price=target_price,
-                base_rationale=rationale,
-            )
-            sizing_quantity = self._optional_float(
-                sizing_result, "quantity", "shares", "position_size"
-            )
-            if sizing_quantity is not None:
-                quantity = sizing_quantity
-                sizing_reason = str(
-                    sizing_result.get("reason", sizing_result.get("rationale", ""))
-                ).strip()
-                if sizing_reason:
-                    rationale = f"{rationale} | AI sizing: {sizing_reason}"
-                sizing_provider = str(sizing_result.get("provider", provider))
-                provider = f"{provider}+sizing:{sizing_provider}"
+        quantity_source = str(result.get("quantity_source", "")).strip() or None
 
         return AITradeDecision(
             snapshot.symbol,
@@ -208,4 +118,5 @@ class TradingAgentsAdapter:
             entry_price=entry_price,
             stop_price=stop_price,
             target_price=target_price,
+            quantity_source=quantity_source,
         )
