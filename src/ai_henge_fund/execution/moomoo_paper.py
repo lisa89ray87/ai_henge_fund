@@ -44,7 +44,10 @@ class MoomooPaperExecution:
         self._ctx.close()
 
     def place_limit(self, *, symbol: str, side: str, quantity: int, price: float) -> MoomooPaperOrder:
-        return self._place(symbol=symbol, side=side, quantity=quantity, price=price, order_type=OrderType.NORMAL)
+        order = self._place(symbol=symbol, side=side, quantity=quantity, price=price, order_type=OrderType.NORMAL)
+        # Every paper limit order must be broker-verified. This is especially
+        # important for target exits: an accepted Python call is not enough.
+        return self.verify_limit_order(order)
 
     def place_market(self, *, symbol: str, side: str, quantity: int) -> MoomooPaperOrder:
         return self._place(symbol=symbol, side=side, quantity=quantity, price=0.0, order_type=OrderType.MARKET)
@@ -52,9 +55,9 @@ class MoomooPaperExecution:
     def verify_limit_order(self, order: MoomooPaperOrder, *, attempts: int = 3, delay_seconds: float = 0.5) -> MoomooPaperOrder:
         """Verify that a submitted SIMULATE limit order is visible at the broker.
 
-        A target order must be confirmed by Moomoo before the lifecycle reports
-        exit protection as armed. If the order is already filled, verification
-        also succeeds because the broker has accepted and processed it.
+        If the order has already filled, the returned order status is accepted
+        as broker confirmation. Otherwise the order must appear in the working
+        order list before this method succeeds.
         """
         expected_side = order.side.upper()
         expected_symbol = order.symbol.strip().upper()
@@ -77,15 +80,30 @@ class MoomooPaperExecution:
                         raw=row["raw"],
                     )
 
-            # An order can disappear from the working-order list because it
-            # filled immediately. Query the order monitor elsewhere for fills;
-            # here we only avoid falsely claiming that an accepted order failed
-            # during the brief broker propagation window.
+            # Query the raw broker order list so an immediately filled order is
+            # not mistaken for a submission failure. This query intentionally
+            # includes terminal orders unlike list_open_orders().
+            ret, data = self._ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
+            if ret == 0 and data is not None and not data.empty:
+                for _, row in data.iterrows():
+                    broker_id = str(row.get("order_id", ""))
+                    if broker_id == order.order_id:
+                        status = str(row.get("order_status", "")).upper()
+                        if status in {"FILLED_ALL", "FILLED_PART", "FILLED", "CANCELLED_ALL", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}:
+                            return MoomooPaperOrder(
+                                order_id=order.order_id,
+                                symbol=order.symbol,
+                                side=order.side,
+                                quantity=order.quantity,
+                                price=order.price,
+                                status=status,
+                                raw=row.to_dict(),
+                            )
             if attempt + 1 < max(1, attempts):
                 sleep(max(0.0, delay_seconds))
 
         raise RuntimeError(
-            f"Moomoo paper limit order {order.order_id} was not visible as a working order "
+            f"Moomoo paper limit order {order.order_id} was not visible at the broker "
             f"after {max(1, attempts)} verification attempt(s)"
         )
 
