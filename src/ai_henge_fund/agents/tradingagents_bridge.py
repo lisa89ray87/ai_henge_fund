@@ -23,6 +23,10 @@ class TradingAgentsDecision:
     confidence: float | None
     rationale: str
     provider: str
+    quantity: float | None = None
+    entry_price: float | None = None
+    stop_price: float | None = None
+    target_price: float | None = None
 
 
 class TradingAgentsRuntime(Protocol):
@@ -65,15 +69,7 @@ class TradingAgentsBridge:
 
 
 class TradingAgentsGraphRuntime:
-    """Production adapter around TauricResearch TradingAgentsGraph.
-
-    AI is an enhancement layer, not a hard availability dependency for paper
-    testing. If the configured LLM provider(s) are temporarily unavailable due
-    to quota/rate-limit/authentication/billing errors, this runtime falls back
-    to the deterministic signal supplied in the request. The fallback remains
-    conservative: its confidence is derived from the deterministic score and
-    the downstream RiskGate still has final authority before any paper order.
-    """
+    """Production adapter around TauricResearch TradingAgentsGraph."""
 
     def __init__(self) -> None:
         try:
@@ -105,7 +101,6 @@ class TradingAgentsGraphRuntime:
 
     @classmethod
     def _prepare_google_key(cls) -> None:
-        """Map our user-facing GEMINI_API_KEY secret to TradingAgents' GOOGLE_API_KEY."""
         if not cls._has_key("GOOGLE_API_KEY") and cls._has_key("GEMINI_API_KEY"):
             os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
 
@@ -122,58 +117,46 @@ class TradingAgentsGraphRuntime:
 
         if provider == "google_genai":
             self._prepare_google_key()
-            config["deep_think_llm"] = os.getenv(
-                "GEMINI_DEEP_THINK_LLM", "gemini-3.1-flash-lite"
-            )
-            config["quick_think_llm"] = os.getenv(
-                "GEMINI_QUICK_THINK_LLM", "gemini-3.1-flash-lite"
-            )
+            config["deep_think_llm"] = os.getenv("GEMINI_DEEP_THINK_LLM", "gemini-3.1-flash-lite")
+            config["quick_think_llm"] = os.getenv("GEMINI_QUICK_THINK_LLM", "gemini-3.1-flash-lite")
         else:
-            config["deep_think_llm"] = os.getenv(
-                "TRADINGAGENTS_DEEP_THINK_LLM", "gpt-4.1"
-            )
-            config["quick_think_llm"] = os.getenv(
-                "TRADINGAGENTS_QUICK_THINK_LLM", "gpt-4.1-mini"
-            )
+            config["deep_think_llm"] = os.getenv("TRADINGAGENTS_DEEP_THINK_LLM", "gpt-4.1")
+            config["quick_think_llm"] = os.getenv("TRADINGAGENTS_QUICK_THINK_LLM", "gpt-4.1-mini")
 
         self._graphs[provider] = self._graph_cls(debug=False, config=config)
         return self._graphs[provider]
 
     @staticmethod
     def _is_provider_failure(exc: Exception) -> bool:
-        """Return True only for failures where changing/falling back is sensible."""
         message = str(exc).lower()
         markers = (
-            "429",
-            "rate limit",
-            "rate_limit",
-            "quota",
-            "resource_exhausted",
-            "insufficient_quota",
-            "billing",
-            "credit balance",
-            "authentication",
-            "unauthorized",
-            "invalid api key",
-            "api key is invalid",
-            "not_found",
-            "model is not found",
-            "no longer available",
-            "not supported for generatecontent",
+            "429", "rate limit", "rate_limit", "quota", "resource_exhausted",
+            "insufficient_quota", "billing", "credit balance", "authentication",
+            "unauthorized", "invalid api key", "api key is invalid", "not_found",
+            "model is not found", "no longer available", "not supported for generatecontent",
         )
         return any(marker in message for marker in markers)
 
     @staticmethod
     def _normalize_tradingagents_symbol(symbol: str) -> str:
-        """Convert broker/exchange-qualified symbols to TradingAgents ticker format."""
         normalized = symbol.strip().upper()
         if normalized.startswith("US."):
             return normalized[3:]
         return normalized
 
     @staticmethod
-    def _normalize_decision(raw_decision: Any, symbol: str) -> tuple[str, float | None, str]:
-        """Normalize current TradingAgents dict or string decision formats."""
+    def _optional_float(value: Any) -> float | None:
+        if value is None or value == "":
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _normalize_decision(
+        cls, raw_decision: Any, symbol: str
+    ) -> tuple[str, float | None, str, float | None, float | None, float | None, float | None]:
         value = raw_decision
         if isinstance(value, str):
             text = value.strip()
@@ -182,7 +165,7 @@ class TradingAgentsGraphRuntime:
             except json.JSONDecodeError:
                 action = text.upper()
                 if action in {"BUY", "SELL", "HOLD", "WAIT"}:
-                    return action, None, f"TradingAgents returned {action} without confidence."
+                    return action, None, f"TradingAgents returned {action} without confidence.", None, None, None, None
                 raise RuntimeError(
                     f"TradingAgents returned an unsupported decision string for {symbol}: {text[:200]}"
                 )
@@ -193,12 +176,7 @@ class TradingAgentsGraphRuntime:
                 f"{type(raw_decision).__name__}"
             )
 
-        action = str(
-            value.get("action")
-            or value.get("decision")
-            or value.get("recommendation")
-            or "hold"
-        ).strip().upper()
+        action = str(value.get("action") or value.get("decision") or value.get("recommendation") or "hold").strip().upper()
         if action in {"HOLD", "WAIT", "NEUTRAL"}:
             action = "HOLD"
         elif action in {"BUY", "LONG"}:
@@ -206,26 +184,22 @@ class TradingAgentsGraphRuntime:
         elif action in {"SELL", "SHORT"}:
             action = "SELL"
         else:
-            raise RuntimeError(
-                f"TradingAgents returned unsupported action for {symbol}: {action!r}"
-            )
+            raise RuntimeError(f"TradingAgents returned unsupported action for {symbol}: {action!r}")
 
-        confidence_value = value.get("confidence")
-        confidence = float(confidence_value) if confidence_value is not None else None
-        rationale = str(
-            value.get("reasoning")
-            or value.get("rationale")
-            or value.get("analysis")
-            or ""
-        ).strip()
+        confidence = cls._optional_float(value.get("confidence"))
+        rationale = str(value.get("reasoning") or value.get("rationale") or value.get("analysis") or "").strip()
         if not rationale:
             rationale = f"TradingAgents decision: {action}"
 
-        return action, confidence, rationale
+        quantity = cls._optional_float(value.get("quantity", value.get("shares", value.get("position_size"))))
+        entry_price = cls._optional_float(value.get("entry_price", value.get("entry")))
+        stop_price = cls._optional_float(value.get("stop_price", value.get("stop")))
+        target_price = cls._optional_float(value.get("target_price", value.get("target")))
+
+        return action, confidence, rationale, quantity, entry_price, stop_price, target_price
 
     @staticmethod
     def _deterministic_fallback(request: dict[str, Any], reason: str) -> TradingAgentsDecision:
-        """Produce a conservative provider-independent decision for paper testing."""
         direction = str(request.get("deterministic_direction", "NEUTRAL")).upper()
         score = float(request.get("deterministic_score", 0) or 0)
         if direction == "LONG":
@@ -234,10 +208,6 @@ class TradingAgentsGraphRuntime:
             action = "SELL"
         else:
             action = "HOLD"
-
-        # The deterministic engine's maximum absolute score is 8. Strong setups
-        # therefore retain meaningful confidence; weaker setups remain below the
-        # normal 0.70 RiskGate threshold and cannot place a paper order.
         confidence = min(1.0, abs(score) / 8.0)
         return TradingAgentsDecision(
             action=action,
@@ -250,25 +220,23 @@ class TradingAgentsGraphRuntime:
         symbol = str(request["symbol"]).strip().upper()
         tradingagents_symbol = self._normalize_tradingagents_symbol(symbol)
         generated_at = request.get("generated_at")
-        if generated_at:
-            analysis_date = datetime.fromisoformat(str(generated_at)).date().isoformat()
-        else:
-            analysis_date = datetime.now().date().isoformat()
+        analysis_date = datetime.fromisoformat(str(generated_at)).date().isoformat() if generated_at else datetime.now().date().isoformat()
 
-        _, raw_decision = self._build_graph(provider).propagate(
-            tradingagents_symbol, analysis_date
-        )
-        action, confidence, rationale = self._normalize_decision(raw_decision, symbol)
+        _, raw_decision = self._build_graph(provider).propagate(tradingagents_symbol, analysis_date)
+        action, confidence, rationale, quantity, entry_price, stop_price, target_price = self._normalize_decision(raw_decision, symbol)
 
         return TradingAgentsDecision(
             action=action,
             confidence=confidence,
             rationale=rationale,
             provider=f"tradingagents-graph:{provider}",
+            quantity=quantity,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            target_price=target_price,
         )
 
     def analyze(self, request: dict[str, Any]) -> TradingAgentsDecision:
-        """Use AI when available, otherwise continue with deterministic reasoning."""
         if self._primary_provider is None:
             print("No AI provider configured; using deterministic fallback.")
             return self._deterministic_fallback(request, "no AI provider configured")
@@ -281,23 +249,14 @@ class TradingAgentsGraphRuntime:
                 raise
 
             if primary == "openai" and self._has_gemini_key():
-                print(
-                    "OpenAI provider failed with a provider-level error; "
-                    "retrying this analysis with Gemini."
-                )
+                print("OpenAI provider failed with a provider-level error; retrying this analysis with Gemini.")
                 try:
                     return self._run("google_genai", request)
                 except Exception as gemini_exc:
                     if not self._is_provider_failure(gemini_exc):
                         raise
-                    print(
-                        "Gemini provider also failed with a provider-level error; "
-                        "using deterministic fallback for this analysis."
-                    )
+                    print("Gemini provider also failed with a provider-level error; using deterministic fallback for this analysis.")
                     return self._deterministic_fallback(request, str(gemini_exc))
 
-            print(
-                f"{primary} provider failed with a provider-level error; "
-                "using deterministic fallback for this analysis."
-            )
+            print(f"{primary} provider failed with a provider-level error; using deterministic fallback for this analysis.")
             return self._deterministic_fallback(request, str(primary_exc))
