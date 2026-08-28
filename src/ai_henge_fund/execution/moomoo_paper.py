@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from time import sleep
 
@@ -40,25 +41,26 @@ class MoomooPaperExecution:
             filter_trdmarket=TrdMarket.US,
         )
 
+    @staticmethod
+    def normalize_price(price: float) -> float:
+        """Normalize a US stock price to Moomoo-compatible precision."""
+        value = Decimal(str(price))
+        if value <= 0:
+            return float(value)
+        quantum = Decimal("0.01") if value >= Decimal("1") else Decimal("0.0001")
+        return float(value.quantize(quantum, rounding=ROUND_HALF_UP))
+
     def close(self) -> None:
         self._ctx.close()
 
     def place_limit(self, *, symbol: str, side: str, quantity: int, price: float) -> MoomooPaperOrder:
         order = self._place(symbol=symbol, side=side, quantity=quantity, price=price, order_type=OrderType.NORMAL)
-        # Every paper limit order must be broker-verified. This is especially
-        # important for target exits: an accepted Python call is not enough.
         return self.verify_limit_order(order)
 
     def place_market(self, *, symbol: str, side: str, quantity: int) -> MoomooPaperOrder:
         return self._place(symbol=symbol, side=side, quantity=quantity, price=0.0, order_type=OrderType.MARKET)
 
     def verify_limit_order(self, order: MoomooPaperOrder, *, attempts: int = 3, delay_seconds: float = 0.5) -> MoomooPaperOrder:
-        """Verify that a submitted SIMULATE limit order is visible at the broker.
-
-        If the order has already filled, the returned order status is accepted
-        as broker confirmation. Otherwise the order must appear in the working
-        order list before this method succeeds.
-        """
         expected_side = order.side.upper()
         expected_symbol = order.symbol.strip().upper()
         for attempt in range(max(1, attempts)):
@@ -80,9 +82,6 @@ class MoomooPaperExecution:
                         raw=row["raw"],
                     )
 
-            # Query the raw broker order list so an immediately filled order is
-            # not mistaken for a submission failure. This query intentionally
-            # includes terminal orders unlike list_open_orders().
             ret, data = self._ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
             if ret == 0 and data is not None and not data.empty:
                 for _, row in data.iterrows():
@@ -121,7 +120,6 @@ class MoomooPaperExecution:
             raise RuntimeError(f"Moomoo paper order cancellation failed: {data}")
 
     def list_positions(self) -> list[dict[str, Any]]:
-        """Read authoritative US SIMULATE positions for startup reconciliation."""
         ret, data = self._ctx.position_list_query(trd_env=TrdEnv.SIMULATE)
         if ret != 0:
             raise RuntimeError(f"Moomoo paper position query failed: {data}")
@@ -138,7 +136,6 @@ class MoomooPaperExecution:
         return rows
 
     def list_open_orders(self) -> list[dict[str, Any]]:
-        """Read currently working SIMULATE orders without changing them."""
         ret, data = self._ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
         if ret != 0:
             raise RuntimeError(f"Moomoo paper order query failed: {data}")
@@ -173,9 +170,10 @@ class MoomooPaperExecution:
         if not symbol:
             raise ValueError("symbol must not be empty")
 
+        normalized_price = self.normalize_price(price) if order_type == OrderType.NORMAL else 0.0
         trd_side = TrdSide.BUY if side == "BUY" else TrdSide.SELL
         ret, data = self._ctx.place_order(
-            price=float(price),
+            price=normalized_price,
             qty=int(quantity),
             code=symbol,
             trd_side=trd_side,
@@ -190,4 +188,4 @@ class MoomooPaperExecution:
         if not order_id:
             raise RuntimeError("Moomoo accepted the order but returned no order_id")
         status = str(row.get("order_status", "SUBMITTING")).upper()
-        return MoomooPaperOrder(order_id, symbol, side, float(quantity), float(price), status, data)
+        return MoomooPaperOrder(order_id, symbol, side, float(quantity), normalized_price, status, data)
