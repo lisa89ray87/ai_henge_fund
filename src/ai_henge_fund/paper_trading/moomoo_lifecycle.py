@@ -51,7 +51,7 @@ class MoomooPaperTradeLifecycle:
         self.monitor.close()
 
     def reconcile_startup(self) -> int:
-        """Rebuild in-memory positions and restore both target orders and stop watchers."""
+        """Rebuild in-memory positions and restore target orders and stop watchers."""
         broker_positions = self.execution.list_positions()
         broker_by_symbol = {row["symbol"]: row for row in broker_positions}
         working_orders = self.execution.list_open_orders()
@@ -79,23 +79,27 @@ class MoomooPaperTradeLifecycle:
                 f"entry=${row['average_price']:,.4f} target={state.target_price} stop={state.stop_price}"
             )
 
-            target_order_id = None
-            if state.target_price and not self._has_matching_exit_order(working_orders, symbol, state.target_price, state.side):
-                target_side = "SELL" if signed_qty > 0 else "BUY"
-                order = self.execution.place_limit(
-                    symbol=symbol, side=target_side, quantity=int(abs(signed_qty)), price=state.target_price
-                )
-                target_order_id = order.order_id
+            target_order_id = self._matching_exit_order_id(working_orders, symbol, state.target_price, state.side)
+            if target_order_id:
                 self._target_orders[symbol] = target_order_id
-                print(f"RECONCILE {symbol}: target order restored {order.order_id} @ ${state.target_price:,.4f}")
-            else:
-                target_order_id = self._matching_exit_order_id(working_orders, symbol, state.target_price, state.side)
-                if target_order_id:
+                print(f"RECONCILE {symbol}: target order found {target_order_id} @ ${state.target_price:,.4f}")
+            elif state.target_price and state.target_price > 0:
+                target_side = "SELL" if signed_qty > 0 else "BUY"
+                try:
+                    order = self.execution.place_limit(
+                        symbol=symbol, side=target_side, quantity=int(abs(signed_qty)), price=float(state.target_price)
+                    )
+                    target_order_id = order.order_id
                     self._target_orders[symbol] = target_order_id
+                    print(f"RECONCILE {symbol}: target order restored and verified {order.order_id} @ ${state.target_price:,.4f}")
+                    self._notify_text(
+                        f"🎯 EXIT PROTECTION RESTORED\n{symbol} {target_side} {int(abs(signed_qty))} @ ${state.target_price:,.4f}\n"
+                        f"Target order ID: {target_order_id}\nStatus: {order.status}"
+                    )
+                except Exception as exc:
+                    print(f"RECONCILE {symbol}: target restoration failed: {exc}")
+                    self._notify_exit_protection_failed(symbol, target_side, int(abs(signed_qty)), state.target_price, str(exc))
 
-            # Always restore the stop watcher when a saved stop exists. A working
-            # target order protects the profit side, but it does not protect the
-            # loss side, so it must not suppress the stop watcher.
             if state.stop_price and not self._has_active_stop_watcher(symbol):
                 self._start_exit_watcher(
                     symbol,
@@ -158,7 +162,11 @@ class MoomooPaperTradeLifecycle:
         order = self.execution.place_limit(symbol=symbol, side=side, quantity=requested_quantity, price=price)
         status = self.monitor.wait_for_terminal(order.order_id, timeout_seconds=self.fill_timeout_seconds)
         if status.status != FILLED_ALL or status.filled_quantity < requested_quantity:
-            return MoomooLifecycleResult("PENDING", None, "Moomoo paper order submitted but not fully filled", broker_order_id=order.order_id, broker_status=status.status, entry_price=price, stop_price=stop_price, target_price=target_price)
+            return MoomooLifecycleResult(
+                "PENDING", None, "Moomoo paper order submitted but not fully filled",
+                broker_order_id=order.order_id, broker_status=status.status,
+                entry_price=price, stop_price=stop_price, target_price=target_price,
+            )
 
         fill_price = status.average_price or price
         signed_quantity = status.filled_quantity if side == "BUY" else -status.filled_quantity
@@ -166,25 +174,52 @@ class MoomooPaperTradeLifecycle:
             trade_id=f"moomoo-{order.order_id}", symbol=symbol, side=side,
             quantity=status.filled_quantity, price=fill_price,
             executed_at=datetime.now(timezone.utc), status=FILLED_ALL,
-            metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order.order_id, "broker_status": status.status, "entry_price": fill_price, "stop_price": stop_price, "target_price": target_price},
+            metadata={
+                "broker": "moomoo", "trading_environment": "SIMULATE",
+                "broker_order_id": order.order_id, "broker_status": status.status,
+                "entry_price": fill_price, "stop_price": stop_price, "target_price": target_price,
+                "position_size_source": "ai",
+            },
         )
         self.positions.open_signed(symbol, signed_quantity, fill_price, stop_price=stop_price, target_price=target_price)
-        self._state.upsert(symbol=symbol, side=side, quantity=status.filled_quantity, entry_price=fill_price, stop_price=stop_price, target_price=target_price, broker_order_id=order.order_id)
+        self._state.upsert(
+            symbol=symbol, side=side, quantity=status.filled_quantity, entry_price=fill_price,
+            stop_price=stop_price, target_price=target_price, broker_order_id=order.order_id,
+        )
         self._notify(trade, "MOOMOO_PAPER_FILL", stop_price=stop_price, target_price=target_price)
 
         target_order_id = None
+        target_protection_ok = True
         if target_price is not None and target_price > 0:
             target_side = "SELL" if side == "BUY" else "BUY"
-            target_order = self.execution.place_limit(symbol=symbol, side=target_side, quantity=int(status.filled_quantity), price=float(target_price))
-            target_order_id = target_order.order_id
-            self._target_orders[symbol] = target_order_id
-            print(f"  paper target order: {target_order_id} @ ${float(target_price):,.4f}")
+            try:
+                target_order = self.execution.place_limit(
+                    symbol=symbol, side=target_side, quantity=int(status.filled_quantity), price=float(target_price)
+                )
+                target_order_id = target_order.order_id
+                self._target_orders[symbol] = target_order_id
+                print(f"  paper target order VERIFIED: {target_order_id} @ ${float(target_price):,.4f} status={target_order.status}")
+                self._notify_text(
+                    f"🎯 TARGET ORDER ARMED\n{symbol} {target_side} {int(status.filled_quantity)} @ ${float(target_price):,.4f}\n"
+                    f"Target order ID: {target_order_id}\nStatus: {target_order.status}"
+                )
+            except Exception as exc:
+                target_protection_ok = False
+                print(f"  paper target order FAILED VERIFICATION: {exc}")
+                self._notify_exit_protection_failed(
+                    symbol, target_side, int(status.filled_quantity), float(target_price), str(exc)
+                )
 
         if stop_price is not None and stop_price > 0:
             self._start_exit_watcher(symbol, side, int(status.filled_quantity), float(stop_price), target_order_id)
             print(f"  paper stop watcher: ${float(stop_price):,.4f}")
 
-        return MoomooLifecycleResult("OPEN", trade, "Moomoo paper order fully filled; exit protection armed", broker_order_id=order.order_id, broker_status=status.status, entry_price=fill_price, stop_price=stop_price, target_price=target_price)
+        reason = "Moomoo paper order fully filled; exit protection armed" if target_protection_ok else "Moomoo paper entry filled; STOP watcher armed but TARGET order verification failed"
+        return MoomooLifecycleResult(
+            "OPEN", trade, reason,
+            broker_order_id=order.order_id, broker_status=status.status,
+            entry_price=fill_price, stop_price=stop_price, target_price=target_price,
+        )
 
     def close_position(self, *, symbol, price):
         symbol = symbol.strip().upper()
@@ -245,6 +280,10 @@ class MoomooPaperTradeLifecycle:
                         return
                     if target_status.status in {"CANCELLED_ALL", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}:
                         target_order_id = None
+                        self._notify_text(
+                            f"⚠️ TARGET ORDER LOST\n{symbol}: target order {target_order_id or 'unknown'} became inactive. "
+                            "Stop watcher remains active."
+                        )
 
                 ret, data = self._quote.get_market_snapshot([symbol])
                 if ret != 0 or data.empty:
@@ -287,8 +326,10 @@ class MoomooPaperTradeLifecycle:
     def _has_matching_exit_order(orders, symbol, target_price, entry_side) -> bool:
         if target_price is None:
             return False
+        exit_side = "SELL" if entry_side == "BUY" else "BUY"
         return any(
-            row["symbol"] == symbol and row["side"].endswith("SELL" if entry_side == "BUY" else "BUY")
+            row["symbol"] == symbol
+            and row["side"].endswith(exit_side)
             and abs(row["price"] - target_price) < 1e-6
             for row in orders
         )
@@ -303,15 +344,28 @@ class MoomooPaperTradeLifecycle:
                 return row["order_id"]
         return None
 
-    @staticmethod
-    def _has_any_exit_order(orders, symbol, entry_side) -> bool:
-        exit_side = "SELL" if entry_side == "BUY" else "BUY"
-        return any(row["symbol"] == symbol and row["side"].endswith(exit_side) for row in orders)
-
     def _notify(self, trade, event, *, stop_price=None, target_price=None):
         if self.telegram is not None:
-            self.telegram.send_trade_event(symbol=trade.symbol, side=trade.side, quantity=trade.quantity, price=trade.price, event=event, order_id=trade.trade_id, stop_price=stop_price, target_price=target_price)
+            self.telegram.send_trade_event(
+                symbol=trade.symbol, side=trade.side, quantity=trade.quantity, price=trade.price,
+                event=event, order_id=trade.trade_id, stop_price=stop_price, target_price=target_price,
+            )
 
     def _notify_text(self, message):
         if self.telegram is not None:
-            self.telegram.send_text(message)
+            try:
+                self.telegram.send_text(message)
+            except Exception as exc:
+                print(f"TELEGRAM: notification failed: {exc}")
+
+    def _notify_exit_protection_failed(self, symbol, side, quantity, target_price, reason):
+        self._notify_text(
+            f"🚨 EXIT PROTECTION FAILED\n"
+            f"Symbol: {symbol}\n"
+            f"Target side: {side}\n"
+            f"Quantity: {quantity:g}\n"
+            f"Target: ${target_price:,.4f}\n"
+            f"Reason: {reason}\n"
+            "The paper position remains open. STOP watcher is active if configured. "
+            "Manual review required."
+        )
