@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
+from ai_henge_fund.config.settings import get_settings
 from ai_henge_fund.market_data.signal_snapshot import SignalSnapshot
 from ai_henge_fund.signal_engine.deterministic import DeterministicSignal
 from ai_henge_fund.tradingagents.adapter import AITradeDecision
@@ -26,18 +27,25 @@ class RiskGate:
     def __init__(
         self,
         *,
-        max_position_value: float = 10_000.0,
+        max_position_value: float | None = None,
         min_ai_confidence: float = 0.70,
         allowed_market_states: Iterable[str] = ("REGULAR", "PRE_MARKET", "AFTERNOON", "AFTER_HOURS"),
         reward_risk_multiple: float = 2.0,
     ) -> None:
+        settings = get_settings()
+        if max_position_value is None:
+            max_position_value = settings.ai_henge_fund_max_capital_deployed
         if max_position_value <= 0:
             raise ValueError("max_position_value must be greater than zero")
         if not 0 <= min_ai_confidence <= 1:
             raise ValueError("min_ai_confidence must be between 0 and 1")
         if reward_risk_multiple <= 0:
             raise ValueError("reward_risk_multiple must be greater than zero")
-        self.max_position_value = max_position_value
+        self.max_position_value = min(max_position_value, settings.ai_henge_fund_max_capital_deployed)
+        self.starting_capital = settings.ai_henge_fund_starting_capital
+        self.risk_per_trade_pct = settings.ai_henge_fund_risk_per_trade_pct
+        self.max_daily_loss = settings.ai_henge_fund_max_daily_loss
+        self.max_positions = settings.ai_henge_fund_max_positions
         self.min_ai_confidence = min_ai_confidence
         self.allowed_market_states = frozenset(allowed_market_states)
         self.reward_risk_multiple = reward_risk_multiple
@@ -70,6 +78,10 @@ class RiskGate:
         snapshot: SignalSnapshot,
         signal: DeterministicSignal,
         ai: AITradeDecision,
+        *,
+        deployed_capital: float = 0.0,
+        daily_realized_loss: float = 0.0,
+        open_position_count: int = 0,
     ) -> RiskDecision:
         checks: list[str] = []
 
@@ -98,6 +110,19 @@ class RiskGate:
             return RiskDecision("WAIT", 0, None, "AI confidence below risk threshold", tuple(checks))
         checks.append("AI_CONFIDENCE")
 
+        if self.max_positions > 0 and open_position_count >= self.max_positions:
+            return RiskDecision("WAIT", 0, None, "Maximum simultaneous position limit reached", tuple(checks))
+        checks.append("POSITION_COUNT")
+
+        if daily_realized_loss >= self.max_daily_loss:
+            return RiskDecision("WAIT", 0, None, "Maximum daily loss limit reached", tuple(checks))
+        checks.append("DAILY_LOSS")
+
+        available_deployment = self.max_position_value - max(0.0, deployed_capital)
+        if available_deployment <= 0:
+            return RiskDecision("WAIT", 0, None, "Maximum deployed capital reached", tuple(checks))
+        checks.append("DEPLOYED_CAPITAL")
+
         try:
             entry, stop, target = self._trade_levels(snapshot, expected)
         except ValueError as exc:
@@ -107,9 +132,24 @@ class RiskGate:
             return RiskDecision("WAIT", 0, None, "Invalid trade risk distance", tuple(checks))
         checks.append("TRADE_LEVELS")
 
-        quantity = max(1, int(self.max_position_value // entry))
+        # The configured risk-per-trade percentage is a ceiling. The hard daily
+        # loss limit is also applied to each new trade so a single order cannot
+        # exceed the entire daily loss budget.
+        configured_trade_risk = self.starting_capital * self.risk_per_trade_pct / 100.0
+        remaining_daily_loss = max(0.0, self.max_daily_loss - max(0.0, daily_realized_loss))
+        allowed_trade_risk = min(configured_trade_risk, remaining_daily_loss)
+        if allowed_trade_risk <= 0:
+            return RiskDecision("WAIT", 0, None, "No daily risk budget remains", tuple(checks))
+
+        quantity_by_capital = int(available_deployment // entry)
+        quantity_by_risk = int(allowed_trade_risk // risk_per_share)
+        quantity = min(quantity_by_capital, quantity_by_risk)
         if quantity <= 0:
-            return RiskDecision("WAIT", 0, None, "Price exceeds maximum position value", tuple(checks))
+            return RiskDecision(
+                "WAIT", 0, None,
+                "Position size cannot satisfy capital and risk limits", tuple(checks),
+                entry_price=entry, stop_price=stop, target_price=target,
+            )
 
         checks.append("POSITION_SIZE")
         return RiskDecision(
