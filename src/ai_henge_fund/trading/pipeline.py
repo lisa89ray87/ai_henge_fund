@@ -12,7 +12,7 @@ from ai_henge_fund.paper_trading.moomoo_lifecycle import MoomooLifecycleResult, 
 from ai_henge_fund.portfolio.manager import PositionManager
 from ai_henge_fund.risk.gate import RiskDecision, RiskGate
 from ai_henge_fund.signal_engine.deterministic import DeterministicSignalEngine
-from ai_henge_fund.tradingagents.adapter import TradingAgentsAdapter
+from ai_henge_fund.tradingagents.adapter import AITradeDecision, TradingAgentsAdapter
 
 
 @dataclass(frozen=True)
@@ -62,13 +62,36 @@ class TradingPipeline:
         """Calculate current strategy deployment from reconstructed paper positions."""
         return sum(abs(position.quantity) * position.average_price for position in self.positions.all())
 
-    def _paper_test_decision(self, snapshot: SignalSnapshot, signal, ai) -> RiskDecision:
-        """Build an execution decision without applying the live-capital risk gate.
+    @staticmethod
+    def _validated_paper_quantity(ai: AITradeDecision, entry_price: float) -> tuple[float, str] | None:
+        """Validate AI-selected size without re-enabling the live RiskGate.
 
-        Paper-only mode intentionally exercises the signal -> order -> protection
-        path without the live capital/risk budget blocking the test. Live trading
-        remains fail-closed by project safety policy.
+        Paper mode exercises AI sizing, but still rejects impossible quantities.
+        The deterministic fallback intentionally uses one share so provider
+        outages do not silently turn into an oversized paper position.
         """
+        quantity = ai.quantity
+        if quantity is None:
+            if ai.provider == "deterministic-fallback":
+                quantity = 1.0
+            else:
+                return None
+        if quantity <= 0:
+            return None
+        if quantity != int(quantity):
+            return None
+        if entry_price <= 0:
+            return None
+        settings = get_settings()
+        max_deployed = settings.ai_henge_fund_max_capital_deployed
+        max_by_capital = int(max_deployed // entry_price)
+        quantity = min(float(int(quantity)), float(max_by_capital))
+        if quantity <= 0:
+            return None
+        return quantity, f"AI-selected quantity={int(quantity)}"
+
+    def _paper_test_decision(self, snapshot: SignalSnapshot, signal, ai: AITradeDecision) -> RiskDecision:
+        """Build an execution decision without applying the live-capital risk gate."""
         expected = "BUY" if signal.direction == "LONG" else "SELL" if signal.direction == "SHORT" else "WAIT"
         if ai.decision != expected or expected == "WAIT":
             return RiskDecision(
@@ -76,16 +99,37 @@ class TradingPipeline:
             )
 
         try:
-            entry, stop, target = self.risk_gate._trade_levels(snapshot, expected)
+            fallback_entry, fallback_stop, fallback_target = self.risk_gate._trade_levels(snapshot, expected)
         except ValueError as exc:
             return RiskDecision("WAIT", 0, None, str(exc), ("PAPER_RISK_BYPASS",))
 
+        entry = ai.entry_price if ai.entry_price is not None else fallback_entry
+        stop = ai.stop_price if ai.stop_price is not None else fallback_stop
+        target = ai.target_price if ai.target_price is not None else fallback_target
+
+        if expected == "BUY":
+            valid_levels = stop < entry < target
+        else:
+            valid_levels = target < entry < stop
+        if not valid_levels:
+            return RiskDecision("WAIT", 0, None, "AI trade levels are invalid for the selected direction", ("PAPER_RISK_BYPASS",))
+
+        validated = self._validated_paper_quantity(ai, entry)
+        if validated is None:
+            return RiskDecision(
+                "WAIT", 0, None,
+                "AI did not provide a valid paper position size",
+                ("PAPER_RISK_BYPASS", "AI_POSITION_SIZE_REQUIRED"),
+                entry_price=entry, stop_price=stop, target_price=target,
+            )
+        quantity, size_check = validated
+
         return RiskDecision(
             expected,
-            1.0,
+            quantity,
             abs(entry - stop),
-            "Paper-only mode: capital risk gate bypassed",
-            ("PAPER_RISK_BYPASS",),
+            f"Paper-only mode: capital risk gate bypassed; {size_check}",
+            ("PAPER_RISK_BYPASS", "AI_POSITION_SIZE", "AI_TRADE_LEVELS"),
             entry_price=entry,
             stop_price=stop,
             target_price=target,
@@ -120,9 +164,6 @@ class TradingPipeline:
                     target_price=risk.target_price,
                 )
             else:
-                # A signal in the opposite direction closes the existing
-                # position; it does not silently reverse it in the same cycle.
-                # The next scan may open the new direction once flat.
                 existing_side = "BUY" if existing.quantity > 0 else "SELL"
                 if risk.action != existing_side:
                     lifecycle = self._ensure_lifecycle().close_position(
