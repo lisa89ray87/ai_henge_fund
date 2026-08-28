@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -12,7 +13,7 @@ from ai_henge_fund.market_data.moomoo_opend import build_moomoo_opend_market_dat
 from ai_henge_fund.market_data.signal_snapshot import build_signal_snapshot
 from ai_henge_fund.market_data.stock_universe import get_stock_universe
 from ai_henge_fund.signal_engine.deterministic import DeterministicSignalEngine
-from ai_henge_fund.trading.pipeline import TradingPipeline
+from ai_henge_fund.trading.pipeline import TradingPipeline, PipelineResult
 from ai_henge_fund.tradingagents.adapter import TradingAgentsAdapter
 
 
@@ -58,10 +59,73 @@ def _session_close(now: datetime) -> datetime:
     return now.replace(hour=16, minute=0, second=0, microsecond=0)
 
 
-def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds) -> int:
+def _analyze_with_timeout(pipeline: TradingPipeline, snapshot, timeout_seconds: float) -> tuple[PipelineResult | None, str | None]:
+    """Run analysis in a daemon thread so a hung provider cannot block the session loop.
+
+    The worker only performs analysis/risk evaluation. Paper execution is deliberately
+    performed by the main thread after a successful return, so a late provider response
+    cannot submit an order after the timeout has been reported.
+    """
+    result: dict[str, PipelineResult] = {}
+    error: dict[str, Exception] = {}
+
+    def worker() -> None:
+        try:
+            result["value"] = pipeline.analyze(snapshot)
+        except Exception as exc:  # pragma: no cover - exercised by provider/runtime failures
+            error["value"] = exc
+
+    started = time.monotonic()
+    thread = threading.Thread(target=worker, name=f"ai-analysis-{snapshot.symbol}", daemon=True)
+    thread.start()
+    thread.join(timeout=timeout_seconds)
+    elapsed = time.monotonic() - started
+
+    if thread.is_alive():
+        return None, f"AI analysis timeout after {timeout_seconds:.0f}s (elapsed {elapsed:.1f}s)"
+    if "value" in error:
+        raise error["value"]
+    if "value" not in result:
+        return None, "AI analysis returned no result"
+    return result["value"], None
+
+
+def _send_risk_notification(pipeline: TradingPipeline, snapshot, result: PipelineResult) -> None:
+    try:
+        pipeline.telegram.send_risk_event(
+            symbol=snapshot.symbol,
+            side=result.ai_decision,
+            price=float(snapshot.last_price),
+            reason=result.risk.reason,
+            entry_price=result.risk.entry_price,
+            stop_price=result.risk.stop_price,
+            target_price=result.risk.target_price,
+        )
+        print(f"  telegram: RISK_REJECTED sent for {snapshot.symbol}")
+    except Exception as exc:
+        print(f"  telegram: SKIP ({exc})")
+
+
+def _send_timeout_notification(pipeline: TradingPipeline, snapshot, reason: str) -> None:
+    try:
+        pipeline.telegram.send_risk_event(
+            symbol=snapshot.symbol,
+            side="WAIT",
+            price=float(snapshot.last_price),
+            reason=reason,
+            entry_price=None,
+            stop_price=None,
+            target_price=None,
+        )
+        print(f"  telegram: AI_TIMEOUT sent for {snapshot.symbol}")
+    except Exception as exc:
+        print(f"  telegram: SKIP ({exc})")
+
+
+def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds) -> int:
     snapshots = []
     cycle_market_state = None
-    for symbol in universe:
+    for index, symbol in enumerate(universe, start=1):
         try:
             quote = market_data.get_quote(symbol)
             candles = market_data.get_candles(symbol, num=candle_count, interval=interval)
@@ -75,6 +139,8 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                 snapshots.append((snapshot, signal))
         except Exception as exc:
             print(f"SCAN {symbol}: SKIP ({exc})")
+        if index % 5 == 0 or index == len(universe):
+            print(f"SCAN HEARTBEAT: {index}/{len(universe)} symbols scanned; {len(snapshots)} candidate(s) collected")
         if scan_delay_seconds > 0:
             time.sleep(scan_delay_seconds)
 
@@ -83,10 +149,21 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
     print(f"AI analysis      : {len(candidates)} candidate(s)")
 
     analyzed = 0
-    for snapshot, _signal in candidates:
+    for candidate_index, (snapshot, _signal) in enumerate(candidates, start=1):
         analyzed += 1
+        print(f"AI HEARTBEAT: {candidate_index}/{len(candidates)} starting {snapshot.symbol}")
         try:
-            result = pipeline.evaluate(snapshot, execute_paper=execute_paper)
+            result, timeout_reason = _analyze_with_timeout(pipeline, snapshot, ai_timeout_seconds)
+            if timeout_reason is not None:
+                print(f"AI/PIPELINE {snapshot.symbol}: TIMEOUT ({timeout_reason})")
+                _send_timeout_notification(pipeline, snapshot, timeout_reason)
+                print("AI HEARTBEAT: stopping remaining candidates for this cycle after timeout; next cycle will retry")
+                break
+            if result is None:
+                print(f"AI/PIPELINE {snapshot.symbol}: SKIP (no result)")
+                continue
+            if execute_paper and result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
+                result = pipeline.execute_paper_result(snapshot, result)
         except Exception as exc:
             print(f"AI/PIPELINE {snapshot.symbol}: SKIP ({exc})")
             continue
@@ -101,19 +178,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             print(f"  target  : ${result.risk.target_price:,.4f}")
 
         if result.risk.action not in {"BUY", "SELL"}:
-            try:
-                pipeline.telegram.send_risk_event(
-                    symbol=snapshot.symbol,
-                    side=result.ai_decision,
-                    price=float(snapshot.last_price),
-                    reason=result.risk.reason,
-                    entry_price=result.risk.entry_price,
-                    stop_price=result.risk.stop_price,
-                    target_price=result.risk.target_price,
-                )
-                print(f"  telegram: RISK_REJECTED sent for {snapshot.symbol}")
-            except Exception as exc:
-                print(f"  telegram: SKIP ({exc})")
+            _send_risk_notification(pipeline, snapshot, result)
 
         if result.lifecycle is not None:
             paper_trades += 1
@@ -123,6 +188,8 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                 print(f"  paper order ID : {result.lifecycle.broker_order_id}")
             if paper_trades >= max_paper_trades:
                 break
+
+        print(f"AI HEARTBEAT: {candidate_index}/{len(candidates)} completed {snapshot.symbol}")
 
     print(f"Cycle AI analyzed: {analyzed}")
     print(f"Session paper trades: {paper_trades}/{max_paper_trades}")
@@ -139,6 +206,7 @@ def main() -> int:
     session_loop = _truthy("SESSION_RUN_UNTIL_CLOSE", "true")
     cycle_minutes = _int_env("MOOMOO_SIGNAL_CYCLE_MINUTES", 20)
     scan_delay_seconds = _float_env("MOOMOO_SIGNAL_SCAN_DELAY_SECONDS", 3.2)
+    ai_timeout_seconds = _float_env("MOOMOO_SIGNAL_AI_TIMEOUT_SECONDS", 90.0)
 
     print("=" * 72)
     print("AI Henge Fund - Moomoo OpenD Universe Signal Pipeline")
@@ -150,6 +218,7 @@ def main() -> int:
     print(f"Session mode    : {'UNTIL U.S. CLOSE' if session_loop else 'SINGLE CYCLE'}")
     print(f"Cycle interval  : {cycle_minutes} minutes")
     print(f"Scan throttle   : {scan_delay_seconds:.1f}s between symbols")
+    print(f"AI timeout      : {ai_timeout_seconds:.0f}s per candidate")
     print(f"Paper execution : {'ENABLED' if execute_paper else 'DISABLED (analysis only)'}")
     print("Live trading    : DISABLED")
 
@@ -167,7 +236,7 @@ def main() -> int:
             now = _session_now()
             if not session_loop:
                 pipeline.resume_paper_session()
-                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds)
+                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds)
                 pipeline.handoff_paper_session()
                 break
             if now.weekday() >= 5:
@@ -191,7 +260,7 @@ def main() -> int:
             if paper_trades >= max_paper_trades:
                 print("Paper-trade session limit reached; continuing market monitoring without new orders.")
             else:
-                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds)
+                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds)
             now = _session_now()
             if now >= _session_close(now):
                 pipeline.handoff_paper_session()
