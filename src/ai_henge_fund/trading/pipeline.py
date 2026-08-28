@@ -45,11 +45,9 @@ class TradingPipeline:
         return self._lifecycle
 
     def resume_paper_session(self) -> int:
-        """Reconcile Moomoo positions and restore saved protection at session start."""
         return self._ensure_lifecycle().reconcile_startup()
 
     def handoff_paper_session(self) -> None:
-        """Stop agent-side protection and hand overnight responsibility to the user."""
         if self._lifecycle is not None:
             self._lifecycle.overnight_handoff()
 
@@ -59,36 +57,31 @@ class TradingPipeline:
             self._lifecycle = None
 
     def _deployed_capital(self) -> float:
-        """Calculate current strategy deployment from reconstructed paper positions."""
         return sum(abs(position.quantity) * position.average_price for position in self.positions.all())
 
     @staticmethod
     def _validated_paper_quantity(ai: AITradeDecision, entry_price: float) -> tuple[float, str] | None:
-        """Validate AI-selected size without re-enabling the live RiskGate.
-
-        Paper mode exercises AI sizing, but still rejects impossible quantities.
-        The deterministic fallback intentionally uses one share so provider
-        outages do not silently turn into an oversized paper position.
-        """
+        """Validate AI-selected size without silently changing the AI's size."""
         quantity = ai.quantity
         if quantity is None:
             if ai.provider == "deterministic-fallback":
                 quantity = 1.0
+                source = "deterministic-fallback"
             else:
                 return None
-        if quantity <= 0:
+        else:
+            source = "ai"
+
+        if quantity <= 0 or quantity != int(quantity) or entry_price <= 0:
             return None
-        if quantity != int(quantity):
-            return None
-        if entry_price <= 0:
-            return None
+
         settings = get_settings()
         max_deployed = settings.ai_henge_fund_max_capital_deployed
         max_by_capital = int(max_deployed // entry_price)
-        quantity = min(float(int(quantity)), float(max_by_capital))
-        if quantity <= 0:
+        if max_by_capital <= 0 or int(quantity) > max_by_capital:
             return None
-        return quantity, f"AI-selected quantity={int(quantity)}"
+
+        return float(int(quantity)), f"{source} position size={int(quantity)}"
 
     def _paper_test_decision(self, snapshot: SignalSnapshot, signal, ai: AITradeDecision) -> RiskDecision:
         """Build an execution decision without applying the live-capital risk gate."""
@@ -116,9 +109,13 @@ class TradingPipeline:
 
         validated = self._validated_paper_quantity(ai, entry)
         if validated is None:
+            reason = "AI did not provide a valid paper position size"
+            if ai.quantity is not None and entry > 0:
+                max_by_capital = int(get_settings().ai_henge_fund_max_capital_deployed // entry)
+                if ai.quantity > max_by_capital:
+                    reason = f"AI position size {ai.quantity:g} exceeds paper capital limit; maximum affordable is {max_by_capital} share(s)"
             return RiskDecision(
-                "WAIT", 0, None,
-                "AI did not provide a valid paper position size",
+                "WAIT", 0, None, reason,
                 ("PAPER_RISK_BYPASS", "AI_POSITION_SIZE_REQUIRED"),
                 entry_price=entry, stop_price=stop, target_price=target,
             )
@@ -136,35 +133,20 @@ class TradingPipeline:
         )
 
     def analyze(self, snapshot: SignalSnapshot) -> PipelineResult:
-        """Run signal + AI + risk evaluation without placing a paper order.
-
-        This separation is intentional: the AI call can be time-bounded by the
-        session runner without allowing a late-returning AI thread to submit an
-        order after its timeout has already been reported.
-        """
         signal = self.signal_engine.evaluate(snapshot)
         ai = self.ai_adapter.analyze(snapshot, signal)
         settings = get_settings()
-
         if not settings.moomoo_live_trading_enabled:
             risk = self._paper_test_decision(snapshot, signal, ai)
         else:
             risk = self.risk_gate.evaluate(
-                snapshot,
-                signal,
-                ai,
+                snapshot, signal, ai,
                 deployed_capital=self._deployed_capital(),
                 open_position_count=len(self.positions.all()),
             )
-
         return PipelineResult(signal.direction, ai.decision, risk, None)
 
     def execute_paper_result(self, snapshot: SignalSnapshot, result: PipelineResult) -> PipelineResult:
-        """Execute an already-completed, validated paper decision.
-
-        Kept separate from ``analyze`` so a timed-out AI analysis cannot place a
-        paper order after the runner has moved on.
-        """
         lifecycle = None
         if result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
             existing = self.positions.get(snapshot.symbol)
@@ -184,15 +166,9 @@ class TradingPipeline:
                         symbol=snapshot.symbol,
                         price=float(snapshot.last_price),
                     )
-        return PipelineResult(
-            result.deterministic_direction,
-            result.ai_decision,
-            result.risk,
-            lifecycle,
-        )
+        return PipelineResult(result.deterministic_direction, result.ai_decision, result.risk, lifecycle)
 
     def evaluate(self, snapshot: SignalSnapshot, *, execute_paper: bool = True) -> PipelineResult:
-        """Backward-compatible combined analysis and optional paper execution."""
         result = self.analyze(snapshot)
         if execute_paper:
             return self.execute_paper_result(snapshot, result)
