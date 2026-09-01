@@ -32,14 +32,15 @@ class GraphRunner:
             "rationale": decision.rationale,
             "provider": decision.provider,
         }
-        # Preserve AI position-sizing and trade-level fields returned by the
-        # TradingAgents runtime. The previous runner dropped these fields,
-        # causing the downstream paper-sizing validator to see quantity=None.
-        for key in ("quantity", "entry_price", "stop_price", "target_price"):
+        for key in ("quantity", "entry_price", "stop_price", "target_price", "quantity_source"):
             value = getattr(decision, key, None)
             if value is not None:
                 result[key] = value
         return result
+
+    def cancel(self, symbol: str) -> None:
+        """Mark a timed-out symbol so a late graph return cannot trigger sizing."""
+        self.runtime.cancel(symbol)
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -96,6 +97,18 @@ def _analyze_with_timeout(pipeline: TradingPipeline, snapshot, timeout_seconds: 
     if "value" not in result:
         return None, "AI analysis returned no result"
     return result["value"], None
+
+
+def _cancel_timed_out_analysis(pipeline: TradingPipeline, snapshot) -> None:
+    """Best-effort cancellation boundary for late provider work after a timeout."""
+    adapter = getattr(pipeline, "ai_adapter", None)
+    runner = getattr(adapter, "runner", None)
+    cancel = getattr(runner, "cancel", None)
+    if callable(cancel):
+        try:
+            cancel(snapshot.symbol)
+        except Exception as exc:
+            print(f"  AI cancellation: SKIP ({exc})")
 
 
 def _send_risk_notification(pipeline: TradingPipeline, snapshot, result: PipelineResult) -> None:
@@ -187,10 +200,11 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
         try:
             result, timeout_reason = _analyze_with_timeout(pipeline, snapshot, ai_timeout_seconds)
             if timeout_reason is not None:
+                _cancel_timed_out_analysis(pipeline, snapshot)
                 print(f"AI/PIPELINE {snapshot.symbol}: TIMEOUT ({timeout_reason})")
                 _send_timeout_notification(pipeline, snapshot, timeout_reason)
-                print("AI HEARTBEAT: stopping remaining candidates for this cycle after timeout; next cycle will retry")
-                break
+                print("AI HEARTBEAT: candidate timed out; continuing with remaining candidates")
+                continue
             if result is None:
                 print(f"AI/PIPELINE {snapshot.symbol}: SKIP (no result)")
                 continue
