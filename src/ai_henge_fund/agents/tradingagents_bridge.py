@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import threading
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -89,6 +90,8 @@ class TradingAgentsGraphRuntime:
 
         self._graph_cls = TradingAgentsGraph
         self._graphs: dict[str, Any] = {}
+        self._cancelled_symbols: set[str] = set()
+        self._cancel_lock = threading.Lock()
 
         if self._has_key("OPENAI_API_KEY"):
             self._primary_provider = "openai"
@@ -109,6 +112,31 @@ class TradingAgentsGraphRuntime:
     def _prepare_google_key(cls) -> None:
         if not cls._has_key("GOOGLE_API_KEY") and cls._has_key("GEMINI_API_KEY"):
             os.environ["GOOGLE_API_KEY"] = os.environ["GEMINI_API_KEY"]
+
+    @staticmethod
+    def _normalize_symbol(symbol: str) -> str:
+        normalized = symbol.strip().upper()
+        return normalized
+
+    def cancel(self, symbol: str) -> None:
+        """Mark a timed-out symbol so late provider work cannot continue into sizing."""
+        normalized = self._normalize_symbol(symbol)
+        with self._cancel_lock:
+            self._cancelled_symbols.add(normalized)
+
+    def _clear_cancelled(self, symbol: str) -> None:
+        normalized = self._normalize_symbol(symbol)
+        with self._cancel_lock:
+            self._cancelled_symbols.discard(normalized)
+
+    def _is_cancelled(self, symbol: str) -> bool:
+        normalized = self._normalize_symbol(symbol)
+        with self._cancel_lock:
+            return normalized in self._cancelled_symbols
+
+    def _raise_if_cancelled(self, symbol: str) -> None:
+        if self._is_cancelled(symbol):
+            raise RuntimeError(f"AI analysis cancelled after timeout for {symbol}")
 
     def _build_graph(self, provider: str) -> Any:
         if provider in self._graphs:
@@ -203,6 +231,7 @@ class TradingAgentsGraphRuntime:
     ) -> tuple[int, str]:
         """Ask one configured provider for the share quantity."""
         symbol = str(request["symbol"]).strip().upper()
+        self._raise_if_cancelled(symbol)
         deterministic_direction = str(request.get("deterministic_direction", "NEUTRAL"))
         deterministic_score = request.get("deterministic_score", 0)
         prompt = f"""
@@ -228,6 +257,7 @@ Target: {target_price}
 
         print(f"AI POSITION SIZE REQUEST {symbol}: provider={provider} action={action}")
         response = graph.quick_thinking_llm.invoke(prompt)
+        self._raise_if_cancelled(symbol)
         parsed = self._parse_json_object(self._response_text(response), symbol)
         quantity = self._optional_float(parsed.get("quantity"))
         if quantity is None or quantity <= 0 or not quantity.is_integer():
@@ -251,6 +281,8 @@ Target: {target_price}
         primary_provider: str,
     ) -> tuple[int, str]:
         """Use primary AI, then the other configured AI provider, then 1-share fallback."""
+        symbol = str(request["symbol"]).strip().upper()
+        self._raise_if_cancelled(symbol)
         providers: list[str] = [primary_provider]
         if primary_provider == "openai" and self._has_gemini_key():
             providers.append("google_genai")
@@ -259,6 +291,7 @@ Target: {target_price}
 
         last_provider_error: Exception | None = None
         for provider in providers:
+            self._raise_if_cancelled(symbol)
             try:
                 graph = self._build_graph(provider)
                 return self._request_ai_position_size(
@@ -279,6 +312,7 @@ Target: {target_price}
                     f"symbol={request['symbol']}; reason={exc}"
                 )
 
+        self._raise_if_cancelled(symbol)
         reason = str(last_provider_error) if last_provider_error else "no AI sizing provider available"
         print(
             f"AI POSITION SIZE FALLBACK {request['symbol']}: quantity=1 "
@@ -353,16 +387,19 @@ Target: {target_price}
 
     def _run(self, provider: str, request: dict[str, Any]) -> TradingAgentsDecision:
         symbol = str(request["symbol"]).strip().upper()
+        self._raise_if_cancelled(symbol)
         tradingagents_symbol = self._normalize_tradingagents_symbol(symbol)
         generated_at = request.get("generated_at")
         analysis_date = datetime.fromisoformat(str(generated_at)).date().isoformat() if generated_at else datetime.now().date().isoformat()
 
         graph = self._build_graph(provider)
         _, raw_decision = graph.propagate(tradingagents_symbol, analysis_date)
+        self._raise_if_cancelled(symbol)
         action, confidence, rationale, quantity, entry_price, stop_price, target_price = self._normalize_decision(raw_decision, symbol)
         quantity_source = f"ai-{provider}" if quantity is not None else None
 
         if action in {"BUY", "SELL"} and quantity is None:
+            self._raise_if_cancelled(symbol)
             quantity, quantity_source = self._size_with_fallbacks(
                 request,
                 action,
@@ -386,6 +423,8 @@ Target: {target_price}
         )
 
     def analyze(self, request: dict[str, Any]) -> TradingAgentsDecision:
+        symbol = str(request.get("symbol", "")).strip().upper()
+        self._clear_cancelled(symbol)
         if self._primary_provider is None:
             print("No AI provider configured; using deterministic fallback.")
             return self._deterministic_fallback(request, "no AI provider configured")
