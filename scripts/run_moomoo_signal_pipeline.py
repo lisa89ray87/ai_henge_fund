@@ -130,27 +130,51 @@ def _send_timeout_notification(pipeline: TradingPipeline, snapshot, reason: str)
         print(f"  telegram: SKIP ({exc})")
 
 
-def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds) -> int:
+def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size):
+    """Scan the universe in quota-safe batches.
+
+    OpenD subscriptions persist on the quote context. Each symbol needs both a
+    quote and candle subscription, so a 45-symbol batch consumes at most 90 of
+    the account's 100 stock-subscription slots. The context is closed and
+    recreated between batches and at the start of every cycle so subscriptions
+    from a previous batch/cycle cannot accumulate.
+    """
+    market_data.close()
+    market_data = build_moomoo_opend_market_data()
     snapshots = []
     cycle_market_state = None
-    for index, symbol in enumerate(universe, start=1):
-        try:
-            quote = market_data.get_quote(symbol)
-            candles = market_data.get_candles(symbol, num=candle_count, interval=interval)
-            if cycle_market_state is None:
-                cycle_market_state = market_data.get_market_state(symbol)
-                print(f"CYCLE MARKET STATE: {cycle_market_state}")
-            snapshot = build_signal_snapshot(symbol=symbol, quote=quote, market_state=cycle_market_state, candles=candles, data_source="moomoo_opend")
-            signal = signal_engine.evaluate(snapshot)
-            print(f"SCAN {symbol}: {signal.direction} score={signal.score} state={signal.setup_state}")
-            if snapshot.is_usable and signal.direction in {"LONG", "SHORT"}:
-                snapshots.append((snapshot, signal))
-        except Exception as exc:
-            print(f"SCAN {symbol}: SKIP ({exc})")
-        if index % 5 == 0 or index == len(universe):
-            print(f"SCAN HEARTBEAT: {index}/{len(universe)} symbols scanned; {len(snapshots)} candidate(s) collected")
-        if scan_delay_seconds > 0:
-            time.sleep(scan_delay_seconds)
+    total = len(universe)
+
+    for batch_start in range(0, total, subscription_batch_size):
+        batch = universe[batch_start:batch_start + subscription_batch_size]
+        batch_number = batch_start // subscription_batch_size + 1
+        batch_count = (total + subscription_batch_size - 1) // subscription_batch_size
+        print(f"SUBSCRIPTION BATCH {batch_number}/{batch_count}: {len(batch)} symbols (quota budget <= {len(batch) * 2})")
+
+        for offset, symbol in enumerate(batch, start=1):
+            index = batch_start + offset
+            try:
+                quote = market_data.get_quote(symbol)
+                candles = market_data.get_candles(symbol, num=candle_count, interval=interval)
+                if cycle_market_state is None:
+                    cycle_market_state = market_data.get_market_state(symbol)
+                    print(f"CYCLE MARKET STATE: {cycle_market_state}")
+                snapshot = build_signal_snapshot(symbol=symbol, quote=quote, market_state=cycle_market_state, candles=candles, data_source="moomoo_opend")
+                signal = signal_engine.evaluate(snapshot)
+                print(f"SCAN {symbol}: {signal.direction} score={signal.score} state={signal.setup_state}")
+                if snapshot.is_usable and signal.direction in {"LONG", "SHORT"}:
+                    snapshots.append((snapshot, signal))
+            except Exception as exc:
+                print(f"SCAN {symbol}: SKIP ({exc})")
+            if index % 5 == 0 or index == total:
+                print(f"SCAN HEARTBEAT: {index}/{total} symbols scanned; {len(snapshots)} candidate(s) collected")
+            if scan_delay_seconds > 0:
+                time.sleep(scan_delay_seconds)
+
+        if batch_start + len(batch) < total:
+            print(f"SUBSCRIPTION BATCH {batch_number}/{batch_count}: complete; resetting OpenD quote context before next batch")
+            market_data.close()
+            market_data = build_moomoo_opend_market_data()
 
     snapshots.sort(key=lambda item: abs(item[1].score), reverse=True)
     candidates = snapshots[:max_ai_candidates]
@@ -201,7 +225,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
 
     print(f"Cycle AI analyzed: {analyzed}")
     print(f"Session paper trades: {paper_trades}/{max_paper_trades}")
-    return paper_trades
+    return paper_trades, market_data
 
 
 def main() -> int:
@@ -215,6 +239,7 @@ def main() -> int:
     cycle_minutes = _int_env("MOOMOO_SIGNAL_CYCLE_MINUTES", 20)
     scan_delay_seconds = _float_env("MOOMOO_SIGNAL_SCAN_DELAY_SECONDS", 3.2)
     ai_timeout_seconds = _float_env("MOOMOO_SIGNAL_AI_TIMEOUT_SECONDS", 90.0)
+    subscription_batch_size = min(_int_env("MOOMOO_SIGNAL_SUBSCRIPTION_BATCH_SIZE", 45), 50)
 
     print("=" * 72)
     print("AI Henge Fund - Moomoo OpenD Universe Signal Pipeline")
@@ -227,6 +252,7 @@ def main() -> int:
     print(f"Cycle interval  : {cycle_minutes} minutes")
     print(f"Scan throttle   : {scan_delay_seconds:.1f}s between symbols")
     print(f"AI timeout      : {ai_timeout_seconds:.0f}s per candidate")
+    print(f"Subscription batches: max {subscription_batch_size} symbols ({subscription_batch_size * 2} stock subscriptions/batch)")
     print(f"Paper execution : {'ENABLED' if execute_paper else 'DISABLED (analysis only)'}")
     print("Live trading    : DISABLED")
 
@@ -244,7 +270,7 @@ def main() -> int:
             now = _session_now()
             if not session_loop:
                 pipeline.resume_paper_session()
-                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds)
+                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size)
                 pipeline.handoff_paper_session()
                 break
             if now.weekday() >= 5:
@@ -268,7 +294,7 @@ def main() -> int:
             if paper_trades >= max_paper_trades:
                 print("Paper-trade session limit reached; continuing market monitoring without new orders.")
             else:
-                paper_trades = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds)
+                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size)
             now = _session_now()
             if now >= _session_close(now):
                 pipeline.handoff_paper_session()
