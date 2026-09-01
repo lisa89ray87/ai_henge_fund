@@ -30,7 +30,8 @@ class PaperTradeLifecycle:
             return TradeLifecycleResult("WAIT", None, "Position already open")
 
         trade = self.engine.execute(symbol=symbol, side=side, quantity=quantity, price=price)
-        self.positions.open(symbol, quantity, price)
+        signed_quantity = quantity if side == "BUY" else -quantity
+        self.positions.open(symbol, signed_quantity, price)
         self._notify(trade, "PAPER_OPEN")
         return TradeLifecycleResult("OPEN", trade, "Position opened")
 
