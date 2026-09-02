@@ -97,6 +97,11 @@ jobs:
           echo Required secrets are configured.
           echo Telegram notifier configuration is present.
 
+      - name: Diagnose AI providers
+        shell: cmd
+        run: |
+          "%PYTHON_ROOT%\python.exe" scripts\diagnose_ai_providers.py
+
       - name: Run Moomoo OpenD universe paper pipeline for full regular session
         shell: cmd
         run: |
