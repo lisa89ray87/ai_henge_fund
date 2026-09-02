@@ -3,13 +3,16 @@
 This script never places trades. It checks provider SDKs, configured model names,
 and performs a minimal text-generation probe so provider failures are visible
 before the long TradingAgents pipeline begins.
+
+For paper trading, Gemini is the required provider while OpenAI credits are
+currently exhausted. OpenAI failures are therefore reported as warnings rather
+than blocking the paper pipeline. Gemini failures remain fatal.
 """
 
 from __future__ import annotations
 
 import importlib.metadata
 import os
-import traceback
 
 
 def _version(package: str) -> str:
@@ -47,8 +50,6 @@ def main() -> int:
         f"quick={os.getenv('GEMINI_QUICK_THINK_LLM', 'gemini-3.1-flash-lite')}"
     )
 
-    failures = 0
-
     if openai_key:
         try:
             from langchain_openai import ChatOpenAI
@@ -60,33 +61,36 @@ def main() -> int:
             )
             print(f"OPENAI PROBE: PASS response={str(response.content)[:120]!r}")
         except Exception as exc:
-            failures += 1
             print(
-                "OPENAI PROBE: FAIL "
+                "OPENAI PROBE: WARN "
                 f"type={type(exc).__name__} message={str(exc)[:1000]!r}"
             )
+    else:
+        print("OPENAI PROBE: SKIPPED (no key configured)")
 
-    if gemini_key:
-        try:
-            from langchain_google_genai import ChatGoogleGenerativeAI
-
-            model = os.getenv("GEMINI_QUICK_THINK_LLM", "gemini-3.1-flash-lite")
-            print(f"GEMINI PROBE: starting model={model}")
-            response = ChatGoogleGenerativeAI(model=model, timeout=20, max_retries=0).invoke(
-                "Reply with exactly: OK"
-            )
-            print(f"GEMINI PROBE: PASS response={str(response.content)[:120]!r}")
-        except Exception as exc:
-            failures += 1
-            print(
-                "GEMINI PROBE: FAIL "
-                f"type={type(exc).__name__} message={str(exc)[:1000]!r}"
-            )
-
-    if failures:
-        print(f"AI PROVIDER DIAGNOSTICS: FAIL ({failures} provider probe(s) failed)")
+    if not gemini_key:
+        print("GEMINI PROBE: FAIL no Gemini/Google API key configured")
+        print("AI PROVIDER DIAGNOSTICS: FAIL (Gemini is required for paper trading)")
         return 1
-    print("AI PROVIDER DIAGNOSTICS: PASS")
+
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+
+        model = os.getenv("GEMINI_QUICK_THINK_LLM", "gemini-3.1-flash-lite")
+        print(f"GEMINI PROBE: starting model={model}")
+        response = ChatGoogleGenerativeAI(model=model, timeout=20, max_retries=0).invoke(
+            "Reply with exactly: OK"
+        )
+        print(f"GEMINI PROBE: PASS response={str(response.content)[:120]!r}")
+    except Exception as exc:
+        print(
+            "GEMINI PROBE: FAIL "
+            f"type={type(exc).__name__} message={str(exc)[:1000]!r}"
+        )
+        print("AI PROVIDER DIAGNOSTICS: FAIL (Gemini probe failed)")
+        return 1
+
+    print("AI PROVIDER DIAGNOSTICS: PASS (Gemini required; OpenAI optional)")
     return 0
 
 
