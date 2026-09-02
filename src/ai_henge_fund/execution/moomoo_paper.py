@@ -158,6 +158,30 @@ class MoomooPaperExecution:
             })
         return rows
 
+    def list_order_history(self) -> list[dict[str, Any]]:
+        """Return all available US SIMULATE orders, including terminal fills."""
+        ret, data = self._ctx.order_list_query(trd_env=TrdEnv.SIMULATE)
+        if ret != 0:
+            raise RuntimeError(f"Moomoo paper order history query failed: {data}")
+        if data is None or data.empty:
+            return []
+        rows: list[dict[str, Any]] = []
+        for _, row in data.iterrows():
+            rows.append({
+                "order_id": str(row.get("order_id", "")),
+                "symbol": str(row.get("code", "")).strip().upper(),
+                "side": str(row.get("trd_side", row.get("side", ""))).upper(),
+                "price": float(row.get("price", 0) or 0),
+                "quantity": float(row.get("qty", 0) or 0),
+                "filled_quantity": float(row.get("dealt_qty", row.get("filled_qty", 0)) or 0),
+                "filled_price": float(row.get("dealt_avg_price", row.get("avg_price", row.get("price", 0))) or 0),
+                "status": str(row.get("order_status", "")).upper(),
+                "create_time": str(row.get("create_time", "")),
+                "updated_time": str(row.get("updated_time", "")),
+                "raw": row.to_dict(),
+            })
+        return rows
+
     def _place(self, *, symbol: str, side: str, quantity: int, price: float, order_type) -> MoomooPaperOrder:
         if quantity <= 0:
             raise ValueError("quantity must be greater than zero")
