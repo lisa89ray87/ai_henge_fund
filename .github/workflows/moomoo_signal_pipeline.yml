@@ -104,6 +104,11 @@ jobs:
 
       - name: Run Moomoo OpenD universe paper pipeline for full regular session
         shell: cmd
+        env:
+          # OpenAI currently has no remaining credits. Leave the secret configured
+          # for diagnostics, but hide it from the paper runtime so Gemini is used
+          # as the primary provider without an unnecessary 429 fallback attempt.
+          OPENAI_API_KEY: ""
         run: |
           echo MOOMOO_SIGNAL_UNIVERSE=default broad US universe
           echo MOOMOO_SIGNAL_CANDLES=%MOOMOO_SIGNAL_CANDLES%
