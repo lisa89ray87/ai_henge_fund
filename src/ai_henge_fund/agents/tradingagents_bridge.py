@@ -76,6 +76,10 @@ class TradingAgentsGraphRuntime:
     The graph remains responsible for the main BUY/SELL/HOLD analysis. Position
     sizing is a separate provider-aware AI decision so a missing sizing field in
     the graph's final decision cannot silently become a rejected paper trade.
+
+    The paper pipeline already has a deterministic market scanner. To keep the
+    AI confirmation stage responsive, the graph uses only the market and news
+    analysts by default. This is configurable with TRADINGAGENTS_SELECTED_ANALYSTS.
     """
 
     def __init__(self) -> None:
@@ -92,6 +96,12 @@ class TradingAgentsGraphRuntime:
         self._graphs: dict[str, Any] = {}
         self._cancelled_symbols: set[str] = set()
         self._cancel_lock = threading.Lock()
+        configured_analysts = os.getenv("TRADINGAGENTS_SELECTED_ANALYSTS", "market,news")
+        self._selected_analysts = tuple(
+            analyst.strip().lower()
+            for analyst in configured_analysts.split(",")
+            if analyst.strip()
+        ) or ("market", "news")
 
         if self._has_key("OPENAI_API_KEY"):
             self._primary_provider = "openai"
@@ -157,7 +167,16 @@ class TradingAgentsGraphRuntime:
             config["deep_think_llm"] = os.getenv("TRADINGAGENTS_DEEP_THINK_LLM", "gpt-4.1")
             config["quick_think_llm"] = os.getenv("TRADINGAGENTS_QUICK_THINK_LLM", "gpt-4.1-mini")
 
-        self._graphs[provider] = self._graph_cls(debug=False, config=config)
+        print(
+            f"TRADINGAGENTS GRAPH: provider={provider} "
+            f"analysts={','.join(self._selected_analysts)} "
+            f"debate={config['max_debate_rounds']} risk={config['max_risk_discuss_rounds']}"
+        )
+        self._graphs[provider] = self._graph_cls(
+            selected_analysts=self._selected_analysts,
+            debug=False,
+            config=config,
+        )
         return self._graphs[provider]
 
     @staticmethod
@@ -357,7 +376,6 @@ Target: {target_price}
         rationale = str(value.get("reasoning") or value.get("rationale") or value.get("analysis") or "").strip()
         if not rationale:
             rationale = f"TradingAgents decision: {action}"
-
         quantity = cls._optional_float(value.get("quantity", value.get("shares", value.get("position_size"))))
         entry_price = cls._optional_float(value.get("entry_price", value.get("entry")))
         stop_price = cls._optional_float(value.get("stop_price", value.get("stop")))
