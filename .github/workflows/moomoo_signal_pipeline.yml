@@ -21,6 +21,8 @@ jobs:
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN }}
       AI_HEDGE_FUND_TELEGRAM_CHAT_ID: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_CHAT_ID }}
+      AI_HEDGE_FUND_DAY_SUMMARY_BOT_TOKEN: ${{ secrets.AI_HEDGE_FUND_DAY_SUMMARY_BOT_TOKEN }}
+      AI_HEDGE_FUND_DAY_SUMMARY_CHAT_ID: ${{ secrets.AI_HEDGE_FUND_DAY_SUMMARY_CHAT_ID }}
       PYTHON_ROOT: 'C:\Users\limli\AppData\Local\Programs\Python\Python312'
       PYTHONUTF8: "1"
       MOOMOO_OPEND_ENABLED: "true"
@@ -135,4 +137,10 @@ jobs:
           echo AI_HEDGE_FUND_MAX_DAILY_LOSS=%AI_HEDGE_FUND_MAX_DAILY_LOSS%
           echo AI_HEDGE_FUND_LIVE_TRADING_ARMED=%AI_HEDGE_FUND_LIVE_TRADING_ARMED%
           echo AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS=%AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS%
-          "%PYTHON_ROOT%\python.exe" scripts/run_moomoo_signal_pipeline.py
+          "%PYTHON_ROOT%\python.exe" scripts\run_moomoo_signal_pipeline.py
+
+      - name: Send paper day summary to dedicated Telegram
+        if: always()
+        shell: cmd
+        run: |
+          "%PYTHON_ROOT%\python.exe" scripts\send_paper_day_summary.py
