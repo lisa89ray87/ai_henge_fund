@@ -15,16 +15,30 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Set up Python
-        uses: actions/setup-python@v6
-        with:
-          python-version: "3.12"
+      - name: Use existing Python 3.12
+        shell: powershell
+        run: |
+          $python = "D:\actions-runner\_work\_tool\Python\3.12.10\x64\python.exe"
+          if (-not (Test-Path $python)) {
+            Write-Error "Expected Python executable was not found: $python"
+            exit 1
+          }
+          & $python --version
+          if ($LASTEXITCODE -ne 0) {
+            Write-Error "Existing Python executable could not be started."
+            exit 1
+          }
+          $env:PATH = "$(Split-Path $python);$env:PATH"
+          "PATH=$env:PATH" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "PYTHON_EXECUTABLE=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Install project with development test dependencies
         shell: powershell
         run: |
-          python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          & $env:PYTHON_EXECUTABLE -m pip install --upgrade pip
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:PYTHON_EXECUTABLE -m pip install -e ".[dev]"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate required secret is configured
         shell: powershell
@@ -36,7 +50,8 @@ jobs:
 
       - name: Run test suite
         shell: powershell
-        run: python -m pytest -q
+        run: |
+          & $env:PYTHON_EXECUTABLE -m pytest -q
 
       - name: Show pre-migration state
         shell: powershell
@@ -58,8 +73,8 @@ jobs:
 
       - name: Import existing daily_stock_analyse signals
         shell: powershell
-        run: python scripts/sync_daily_stock_signals.py
+        run: & $env:PYTHON_EXECUTABLE scripts/sync_daily_stock_signals.py
 
       - name: Verify signal bridge and idempotency
         shell: powershell
-        run: python scripts/verify_daily_stock_signal_sync.py
+        run: & $env:PYTHON_EXECUTABLE scripts/verify_daily_stock_signal_sync.py
