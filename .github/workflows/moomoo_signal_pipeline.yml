@@ -23,7 +23,6 @@ jobs:
       AI_HEDGE_FUND_TELEGRAM_CHAT_ID: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_CHAT_ID }}
       AI_HEDGE_FUND_DAY_SUMMARY_BOT_TOKEN: ${{ secrets.AI_HEDGE_FUND_DAY_SUMMARY_BOT_TOKEN }}
       AI_HEDGE_FUND_DAY_SUMMARY_CHAT_ID: ${{ secrets.AI_HEDGE_FUND_DAY_SUMMARY_CHAT_ID }}
-      PYTHON_ROOT: 'C:\Users\limli\AppData\Local\Programs\Python\Python312'
       PYTHONUTF8: "1"
       MOOMOO_OPEND_ENABLED: "true"
       MOOMOO_READ_ONLY: "true"
@@ -58,27 +57,92 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Verify self-hosted runner and Python
+      - name: Discover installed Python 3.12
+        shell: powershell
+        run: |
+          Write-Host "Runner identity:"
+          whoami
+          Write-Host "USERPROFILE=$env:USERPROFILE"
+
+          $candidates = New-Object System.Collections.Generic.List[string]
+
+          # Prefer the Windows Python launcher when available.
+          $py = Get-Command py.exe -ErrorAction SilentlyContinue
+          if ($py) {
+            try {
+              $launcherCandidates = & $py.Source -3.12 -c "import sys; print(sys.executable)" 2>$null
+              foreach ($candidate in $launcherCandidates) {
+                if ($candidate -and (Test-Path $candidate)) {
+                  $candidates.Add($candidate.Trim())
+                }
+              }
+            } catch {
+              Write-Host "Python launcher could not resolve Python 3.12. Continuing with filesystem discovery."
+            }
+          }
+
+          # Common per-machine and per-user Python 3.12 locations.
+          $roots = @(
+            "C:\Python312",
+            "C:\Program Files\Python312",
+            "C:\Program Files (x86)\Python312",
+            "$env:LOCALAPPDATA\Programs\Python\Python312",
+            "$env:USERPROFILE\AppData\Local\Programs\Python\Python312"
+          )
+          foreach ($root in $roots) {
+            $candidates.Add((Join-Path $root "python.exe"))
+          }
+
+          # Also inspect PATH for a python.exe whose version is exactly 3.12.x.
+          $pathPython = Get-Command python.exe -ErrorAction SilentlyContinue
+          if ($pathPython) {
+            $candidates.Add($pathPython.Source)
+          }
+
+          $python = $null
+          foreach ($candidate in ($candidates | Select-Object -Unique)) {
+            if (-not (Test-Path $candidate)) { continue }
+            try {
+              $version = (& $candidate --version 2>&1 | Out-String).Trim()
+              Write-Host "Checking $candidate -> $version"
+              $majorMinor = & $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null
+              if ($LASTEXITCODE -eq 0 -and $majorMinor.Trim() -eq "3.12") {
+                $python = (Resolve-Path $candidate).Path
+                break
+              }
+            } catch {
+              Write-Host "Unable to execute $candidate"
+            }
+          }
+
+          if (-not $python) {
+            Write-Error "No installed Python 3.12 interpreter was found on the self-hosted runner."
+            exit 1
+          }
+
+          Write-Host "Using Python 3.12: $python"
+          & $python --version
+          & $python -c "import sys; print(sys.executable); print('UTF-8 mode:', sys.flags.utf8_mode)"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+          $pythonDir = Split-Path $python
+          "PYTHON_EXECUTABLE=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "PYTHON_ROOT=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$pythonDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "$(Join-Path $pythonDir 'Scripts')" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Verify discovered Python
         shell: cmd
         run: |
-          echo Runner identity:
-          whoami
-          echo USERPROFILE=%USERPROFILE%
+          echo PYTHON_EXECUTABLE=%PYTHON_EXECUTABLE%
           echo PYTHON_ROOT=%PYTHON_ROOT%
-          if not exist "%PYTHON_ROOT%\python.exe" (
-            echo ERROR: Python 3.12 was not found at %PYTHON_ROOT%\python.exe
-            exit /b 1
-          )
-          echo Python executable found.
-          echo %PYTHON_ROOT%>>"%GITHUB_PATH%"
-          echo %PYTHON_ROOT%\Scripts>>"%GITHUB_PATH%"
-          "%PYTHON_ROOT%\python.exe" --version
-          "%PYTHON_ROOT%\python.exe" -c "import sys; print(sys.executable); print('UTF-8 mode:', sys.flags.utf8_mode)"
+          "%PYTHON_EXECUTABLE%" --version
+          "%PYTHON_EXECUTABLE%" -c "import sys; assert sys.version_info[:2] == (3,12); print(sys.executable)"
 
       - name: Install project
         shell: cmd
         run: |
-          "%PYTHON_ROOT%\python.exe" -m pip install --disable-pip-version-check -e .
+          "%PYTHON_EXECUTABLE%" -m pip install --disable-pip-version-check -e .
 
       - name: Validate required secrets
         shell: cmd
@@ -105,7 +169,7 @@ jobs:
       - name: Diagnose AI providers
         shell: cmd
         run: |
-          "%PYTHON_ROOT%\python.exe" scripts\diagnose_ai_providers.py
+          "%PYTHON_EXECUTABLE%" scripts\diagnose_ai_providers.py
 
       - name: Run Moomoo OpenD universe paper pipeline for full regular session
         shell: cmd
@@ -137,10 +201,10 @@ jobs:
           echo AI_HEDGE_FUND_MAX_DAILY_LOSS=%AI_HEDGE_FUND_MAX_DAILY_LOSS%
           echo AI_HEDGE_FUND_LIVE_TRADING_ARMED=%AI_HEDGE_FUND_LIVE_TRADING_ARMED%
           echo AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS=%AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS%
-          "%PYTHON_ROOT%\python.exe" scripts\run_moomoo_signal_pipeline.py
+          "%PYTHON_EXECUTABLE%" scripts\run_moomoo_signal_pipeline.py
 
       - name: Send paper day summary to dedicated Telegram
         if: always()
         shell: cmd
         run: |
-          "%PYTHON_ROOT%\python.exe" scripts\send_paper_day_summary.py
+          "%PYTHON_EXECUTABLE%" scripts\send_paper_day_summary.py
