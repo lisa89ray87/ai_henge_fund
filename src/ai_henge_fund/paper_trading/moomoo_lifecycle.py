@@ -91,6 +91,9 @@ class MoomooPaperTradeLifecycle:
             if state.stop_price and not self._has_active_stop_watcher(symbol):
                 self._start_exit_watcher(symbol, state.side, int(abs(signed_qty)), state.stop_price, target_order_id)
                 print(f"RECONCILE {symbol}: stop watcher restored @ ${state.stop_price:,.4f}")
+            elif target_order_id and not self._has_active_stop_watcher(symbol):
+                self._start_exit_watcher(symbol, state.side, int(abs(signed_qty)), 0.0, target_order_id)
+                print(f"RECONCILE {symbol}: target watcher restored without local stop")
 
         for symbol in open_states:
             if symbol not in broker_by_symbol:
@@ -181,9 +184,18 @@ class MoomooPaperTradeLifecycle:
             target_order_id = self._arm_target(symbol, side, int(status.filled_quantity), float(target_price), notify=True)
             target_protection_ok = target_order_id is not None
 
-        if stop_price is not None and stop_price > 0:
-            self._start_exit_watcher(symbol, side, int(status.filled_quantity), float(stop_price), target_order_id)
-            print(f"  paper stop watcher: ${float(stop_price):,.4f}")
+        if (stop_price is not None and stop_price > 0) or target_order_id:
+            self._start_exit_watcher(
+                symbol,
+                side,
+                int(status.filled_quantity),
+                float(stop_price or 0.0),
+                target_order_id,
+            )
+            if stop_price is not None and stop_price > 0:
+                print(f"  paper stop watcher: ${float(stop_price):,.4f}")
+            elif target_order_id:
+                print("  paper target watcher: active (no local stop configured)")
 
         reason = "Moomoo paper order fully filled; exit protection armed" if target_protection_ok else "Moomoo paper entry filled; STOP watcher armed but TARGET order verification failed"
         return MoomooLifecycleResult(
@@ -234,7 +246,7 @@ class MoomooPaperTradeLifecycle:
 
     def _start_exit_watcher(self, symbol, entry_side, quantity, stop_price, target_order_id):
         self._stop_watcher(symbol)
-        if not stop_price or stop_price <= 0:
+        if (not stop_price or stop_price <= 0) and not target_order_id:
             return
         stop_event = Event()
         thread = Thread(target=self._watch_exit, args=(symbol, entry_side, quantity, stop_price, target_order_id, stop_event), daemon=True)
@@ -287,32 +299,33 @@ class MoomooPaperTradeLifecycle:
                         target_order_id = self._arm_target(symbol, entry_side, int(abs(remaining.quantity)), float(remaining.target_price), notify=True) if remaining and remaining.target_price else None
                         target_filled_seen = 0.0
 
-                ret, data = self._quote.get_market_snapshot([symbol])
-                if ret != 0 or data.empty:
-                    sleep(self.exit_poll_seconds)
-                    continue
-                last_price = float(data.iloc[0].get("last_price", 0.0) or 0.0)
-                triggered = last_price <= stop_price if entry_side == "BUY" else last_price >= stop_price
-                if triggered:
-                    if target_order_id:
-                        try:
-                            self.execution.cancel(target_order_id)
-                        except Exception as exc:
-                            print(f"EXIT {symbol}: target cancellation failed: {exc}")
-                    exit_side = "SELL" if entry_side == "BUY" else "BUY"
-                    current_position = self.positions.get(symbol)
-                    if current_position is None:
+                if stop_price and stop_price > 0:
+                    ret, data = self._quote.get_market_snapshot([symbol])
+                    if ret != 0 or data.empty:
+                        sleep(self.exit_poll_seconds)
+                        continue
+                    last_price = float(data.iloc[0].get("last_price", 0.0) or 0.0)
+                    triggered = last_price <= stop_price if entry_side == "BUY" else last_price >= stop_price
+                    if triggered:
+                        if target_order_id:
+                            try:
+                                self.execution.cancel(target_order_id)
+                            except Exception as exc:
+                                print(f"EXIT {symbol}: target cancellation failed: {exc}")
+                        exit_side = "SELL" if entry_side == "BUY" else "BUY"
+                        current_position = self.positions.get(symbol)
+                        if current_position is None:
+                            return
+                        exit_quantity = int(abs(current_position.quantity))
+                        exit_order = self.execution.place_market(symbol=symbol, side=exit_side, quantity=exit_quantity)
+                        exit_status = self.monitor.wait_for_terminal(exit_order.order_id, timeout_seconds=self.fill_timeout_seconds)
+                        if exit_status.status == FILLED_ALL and exit_status.filled_quantity > 0:
+                            fill_price = exit_status.average_price or last_price
+                            trade = self._exit_trade(symbol, exit_side, exit_status.filled_quantity, fill_price, exit_order.order_id, "STOP")
+                            self._notify(trade, "MOOMOO_PAPER_STOP_FILL", stop_price=stop_price)
+                        else:
+                            print(f"EXIT {symbol}: stop market order did not fully fill: {exit_status.status}")
                         return
-                    exit_quantity = int(abs(current_position.quantity))
-                    exit_order = self.execution.place_market(symbol=symbol, side=exit_side, quantity=exit_quantity)
-                    exit_status = self.monitor.wait_for_terminal(exit_order.order_id, timeout_seconds=self.fill_timeout_seconds)
-                    if exit_status.status == FILLED_ALL and exit_status.filled_quantity > 0:
-                        fill_price = exit_status.average_price or last_price
-                        trade = self._exit_trade(symbol, exit_side, exit_status.filled_quantity, fill_price, exit_order.order_id, "STOP")
-                        self._notify(trade, "MOOMOO_PAPER_STOP_FILL", stop_price=stop_price)
-                    else:
-                        print(f"EXIT {symbol}: stop market order did not fully fill: {exit_status.status}")
-                    return
             except Exception as exc:
                 print(f"EXIT {symbol}: watcher error: {exc}")
             sleep(self.exit_poll_seconds)
@@ -343,7 +356,6 @@ class MoomooPaperTradeLifecycle:
     def _restore_target_after_partial(self, symbol, position):
         if position.target_price is None or position.target_price <= 0:
             return None
-        side = "BUY" if position.quantity < 0 else "SELL"
         return self._arm_target(symbol, "SELL" if position.quantity > 0 else "BUY", int(abs(position.quantity)), float(position.target_price), notify=True)
 
     def _arm_target(self, symbol, entry_side, quantity, target_price, *, notify):
