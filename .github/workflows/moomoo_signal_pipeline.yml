@@ -60,15 +60,14 @@ jobs:
       - name: Locate runner Python 3.12
         shell: powershell
         run: |
+          $ErrorActionPreference = 'Continue'
           Write-Host "Runner identity:"
           whoami
           Write-Host "USERPROFILE=$env:USERPROFILE"
           Write-Host "PATH python candidates:"
-          where.exe python 2>$null
-          where.exe py 2>$null
+          & where.exe python 2>&1 | ForEach-Object { Write-Host $_ }
+          & where.exe py 2>&1 | ForEach-Object { Write-Host $_ }
 
-          # Do not use actions/setup-python here. On this Windows self-hosted
-          # runner it attempts machine-wide registry changes and requires admin rights.
           $candidates = New-Object System.Collections.Generic.List[string]
 
           # First prefer the Python Launcher, if installed for the runner account.
@@ -87,30 +86,39 @@ jobs:
             }
           }
 
-          # Then check common per-user and machine-wide installation locations.
-          $knownRoots = @(
-            "$env:USERPROFILE\AppData\Local\Programs\Python",
-            "C:\Users\limli\AppData\Local\Programs\Python",
-            "C:\Users\runneradmin\AppData\Local\Programs\Python",
-            "C:\Users\Runner\AppData\Local\Programs\Python",
-            "C:\Python312",
-            "C:\Program Files\Python312",
-            "C:\Program Files\Python312\python.exe",
-            "D:\Python312"
+          # Read Python installation paths from the registry without modifying it.
+          $registryKeys = @(
+            'HKCU:\Software\Python\PythonCore\3.12\InstallPath',
+            'HKLM:\Software\Python\PythonCore\3.12\InstallPath',
+            'HKLM:\Software\WOW6432Node\Python\PythonCore\3.12\InstallPath'
           )
-          foreach ($root in $knownRoots) {
-            if ($root -like '*.exe') {
-              if (Test-Path $root) { $candidates.Add($root) }
-              continue
-            }
-            $candidate = Join-Path $root 'Python312\python.exe'
-            if (Test-Path $candidate) { $candidates.Add($candidate) }
-            $candidate = Join-Path $root 'python.exe'
+          foreach ($key in $registryKeys) {
+            try {
+              $installPath = (Get-ItemProperty -Path $key -Name '(default)' -ErrorAction Stop).'(default)'
+              if ($installPath) {
+                $candidate = Join-Path $installPath 'python.exe'
+                Write-Host "Registry Python path: $candidate"
+                if (Test-Path $candidate) { $candidates.Add($candidate) }
+              }
+            } catch { }
+          }
+
+          # Common per-user and machine-wide installation locations.
+          $knownCandidates = @(
+            "$env:USERPROFILE\AppData\Local\Programs\Python\Python312\python.exe",
+            "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe",
+            "C:\Users\runneradmin\AppData\Local\Programs\Python\Python312\python.exe",
+            "C:\Users\Runner\AppData\Local\Programs\Python\Python312\python.exe",
+            "C:\Python312\python.exe",
+            "C:\Program Files\Python312\python.exe",
+            "C:\Program Files (x86)\Python312\python.exe",
+            "D:\Python312\python.exe"
+          )
+          foreach ($candidate in $knownCandidates) {
             if (Test-Path $candidate) { $candidates.Add($candidate) }
           }
 
-          # Finally, discover Python312 installations under user profiles. This
-          # handles a runner service running as a different Windows account.
+          # Discover Python 3.12 installations under user profiles.
           if (Test-Path 'C:\Users') {
             Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
               $candidate = Join-Path $_.FullName 'AppData\Local\Programs\Python\Python312\python.exe'
@@ -134,7 +142,7 @@ jobs:
           }
 
           if (-not $python) {
-            throw "Python 3.12 was not found for the Windows runner account. Install Python 3.12 for that account, or expose an existing Python 3.12 installation through the Python Launcher (py -3.12)."
+            throw "Python 3.12 was not found for the Windows runner account. The diagnostic output above shows the paths visible to the runner."
           }
 
           Write-Host "Using installed Python 3.12: $python"
