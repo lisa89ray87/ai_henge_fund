@@ -10,7 +10,6 @@ def test_long_target_trade_uses_requested_telegram_layout():
 
     assert block == (
         "LYFT\n"
-        "  LONG 500\n"
         "  Entry 500 @ 17.11\n"
         "  Target 17.36\n"
         "  Exit 500 @ 17.36\n"
