@@ -101,13 +101,7 @@ class MoomooPaperTradeLifecycle:
                     self._notify_exit_protection_failed(symbol, target_side, int(abs(signed_qty)), state.target_price, str(exc))
 
             if state.stop_price and not self._has_active_stop_watcher(symbol):
-                self._start_exit_watcher(
-                    symbol,
-                    state.side,
-                    int(abs(signed_qty)),
-                    state.stop_price,
-                    target_order_id,
-                )
+                self._start_exit_watcher(symbol, state.side, int(abs(signed_qty)), state.stop_price, target_order_id)
                 print(f"RECONCILE {symbol}: stop watcher restored @ ${state.stop_price:,.4f}")
 
         for symbol in open_states:
@@ -186,6 +180,11 @@ class MoomooPaperTradeLifecycle:
             symbol=symbol, side=side, quantity=status.filled_quantity, entry_price=fill_price,
             stop_price=stop_price, target_price=target_price, broker_order_id=order.order_id,
         )
+        self._state.record_open(
+            trade_id=trade.trade_id, symbol=symbol, side=side, quantity=status.filled_quantity,
+            entry_price=fill_price, stop_price=stop_price, target_price=target_price,
+            broker_entry_order_id=order.order_id, opened_at=trade.executed_at,
+        )
         self._notify(trade, "MOOMOO_PAPER_FILL", stop_price=stop_price, target_price=target_price)
 
         target_order_id = None
@@ -206,9 +205,7 @@ class MoomooPaperTradeLifecycle:
             except Exception as exc:
                 target_protection_ok = False
                 print(f"  paper target order FAILED VERIFICATION: {exc}")
-                self._notify_exit_protection_failed(
-                    symbol, target_side, int(status.filled_quantity), float(target_price), str(exc)
-                )
+                self._notify_exit_protection_failed(symbol, target_side, int(status.filled_quantity), float(target_price), str(exc))
 
         if stop_price is not None and stop_price > 0:
             self._start_exit_watcher(symbol, side, int(status.filled_quantity), float(stop_price), target_order_id)
@@ -247,6 +244,7 @@ class MoomooPaperTradeLifecycle:
             quantity=status.filled_quantity, price=fill_price, executed_at=datetime.now(timezone.utc), status=FILLED_ALL,
             metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order.order_id, "broker_status": status.status},
         )
+        self._record_exit(symbol, trade, fill_price, order.order_id, "CLOSE")
         self.positions.close(symbol)
         self._state.mark_closed(symbol)
         self._notify(trade, "MOOMOO_PAPER_CLOSE_FILL")
@@ -275,13 +273,14 @@ class MoomooPaperTradeLifecycle:
                     target_status = self.monitor.get(target_order_id)
                     if target_status.status == FILLED_ALL:
                         fill_price = target_status.average_price or stop_price
-                        trade = self._exit_trade(symbol, "SELL" if entry_side == "BUY" else "BUY", target_status.filled_quantity, fill_price, target_order_id)
+                        trade = self._exit_trade(symbol, "SELL" if entry_side == "BUY" else "BUY", target_status.filled_quantity, fill_price, target_order_id, "TARGET")
                         self._notify(trade, "MOOMOO_PAPER_TARGET_FILL", target_price=fill_price)
                         return
                     if target_status.status in {"CANCELLED_ALL", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}:
+                        lost_order_id = target_order_id
                         target_order_id = None
                         self._notify_text(
-                            f"⚠️ TARGET ORDER LOST\n{symbol}: target order {target_order_id or 'unknown'} became inactive. "
+                            f"⚠️ TARGET ORDER LOST\n{symbol}: target order {lost_order_id} became inactive. "
                             "Stop watcher remains active."
                         )
 
@@ -302,7 +301,7 @@ class MoomooPaperTradeLifecycle:
                     exit_status = self.monitor.wait_for_terminal(exit_order.order_id, timeout_seconds=self.fill_timeout_seconds)
                     if exit_status.status == FILLED_ALL:
                         fill_price = exit_status.average_price or last_price
-                        trade = self._exit_trade(symbol, exit_side, exit_status.filled_quantity, fill_price, exit_order.order_id)
+                        trade = self._exit_trade(symbol, exit_side, exit_status.filled_quantity, fill_price, exit_order.order_id, "STOP")
                         self._notify(trade, "MOOMOO_PAPER_STOP_FILL", stop_price=stop_price)
                     else:
                         print(f"EXIT {symbol}: stop market order did not fully fill: {exit_status.status}")
@@ -311,27 +310,29 @@ class MoomooPaperTradeLifecycle:
                 print(f"EXIT {symbol}: watcher error: {exc}")
             sleep(self.exit_poll_seconds)
 
-    def _exit_trade(self, symbol, side, quantity, price, order_id):
+    def _exit_trade(self, symbol, side, quantity, price, order_id, reason):
         trade = PaperTrade(
             trade_id=f"moomoo-{order_id}", symbol=symbol, side=side, quantity=quantity, price=price,
             executed_at=datetime.now(timezone.utc), status=FILLED_ALL,
             metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order_id},
         )
+        self._record_exit(symbol, trade, price, order_id, reason)
         self.positions.close(symbol)
         self._target_orders.pop(symbol, None)
         self._state.mark_closed(symbol)
         return trade
 
-    @staticmethod
-    def _has_matching_exit_order(orders, symbol, target_price, entry_side) -> bool:
-        if target_price is None:
-            return False
-        exit_side = "SELL" if entry_side == "BUY" else "BUY"
-        return any(
-            row["symbol"] == symbol
-            and row["side"].endswith(exit_side)
-            and abs(row["price"] - target_price) < 1e-6
-            for row in orders
+    def _record_exit(self, symbol, trade, price, order_id, reason):
+        state = self._state.get(symbol)
+        if state is None:
+            self._notify_text(
+                f"⚠️ TRADE JOURNAL MISSING\n{symbol}: exit {trade.trade_id} cannot be linked to saved entry state. "
+                "Manual review required."
+            )
+            return
+        self._state.record_exit(
+            trade_id=f"moomoo-{state.broker_order_id}", quantity=trade.quantity, exit_price=price,
+            exit_reason=reason, broker_exit_order_id=order_id, closed_at=trade.executed_at,
         )
 
     @staticmethod
@@ -358,14 +359,8 @@ class MoomooPaperTradeLifecycle:
             except Exception as exc:
                 print(f"TELEGRAM: notification failed: {exc}")
 
-    def _notify_exit_protection_failed(self, symbol, side, quantity, target_price, reason):
+    def _notify_exit_protection_failed(self, symbol, side, quantity, target_price, error):
         self._notify_text(
-            f"🚨 EXIT PROTECTION FAILED\n"
-            f"Symbol: {symbol}\n"
-            f"Target side: {side}\n"
-            f"Quantity: {quantity:g}\n"
-            f"Target: ${target_price:,.4f}\n"
-            f"Reason: {reason}\n"
-            "The paper position remains open. STOP watcher is active if configured. "
-            "Manual review required."
+            f"⚠️ EXIT PROTECTION FAILED\n{symbol} {side} {quantity} @ ${target_price:,.4f}\n"
+            f"Error: {error}\nSTOP watcher remains the only active protection."
         )
