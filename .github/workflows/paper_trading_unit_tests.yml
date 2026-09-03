@@ -2,6 +2,13 @@ name: Paper Trading Unit Tests
 
 on:
   workflow_dispatch:
+  push:
+    paths:
+      - "src/ai_henge_fund/paper_trading/**"
+      - "src/ai_henge_fund/portfolio/**"
+      - "scripts/send_paper_day_summary.py"
+      - "tests/paper_trading/**"
+      - ".github/workflows/paper_trading_unit_tests.yml"
 
 jobs:
   test:
