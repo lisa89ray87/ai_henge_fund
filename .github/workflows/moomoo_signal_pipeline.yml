@@ -70,7 +70,6 @@ jobs:
 
           $candidates = New-Object System.Collections.Generic.List[string]
 
-          # First prefer the Python Launcher, if installed for the runner account.
           $pyLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
           if ($pyLauncher) {
             Write-Host "Python Launcher: $pyLauncher"
@@ -78,15 +77,10 @@ jobs:
               $launcherVersion = (& $pyLauncher -3.12 --version 2>&1 | Out-String).Trim()
               Write-Host "py -3.12 -> $launcherVersion"
               $launcherPath = (& $pyLauncher -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -Last 1).Trim()
-              if ($launcherPath -and (Test-Path $launcherPath)) {
-                $candidates.Add($launcherPath)
-              }
-            } catch {
-              Write-Host "Python Launcher could not resolve Python 3.12"
-            }
+              if ($launcherPath -and (Test-Path $launcherPath)) { $candidates.Add($launcherPath) }
+            } catch { Write-Host "Python Launcher could not resolve Python 3.12" }
           }
 
-          # Read Python installation paths from the registry without modifying it.
           $registryKeys = @(
             'HKCU:\Software\Python\PythonCore\3.12\InstallPath',
             'HKLM:\Software\Python\PythonCore\3.12\InstallPath',
@@ -103,7 +97,6 @@ jobs:
             } catch { }
           }
 
-          # Common per-user and machine-wide installation locations.
           $knownCandidates = @(
             "$env:USERPROFILE\AppData\Local\Programs\Python\Python312\python.exe",
             "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe",
@@ -118,7 +111,6 @@ jobs:
             if (Test-Path $candidate) { $candidates.Add($candidate) }
           }
 
-          # Discover Python 3.12 installations under user profiles.
           if (Test-Path 'C:\Users') {
             Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
               $candidate = Join-Path $_.FullName 'AppData\Local\Programs\Python\Python312\python.exe'
@@ -126,28 +118,29 @@ jobs:
             }
           }
 
+          # Do not accept the runner toolcache Python blindly. A previous
+          # setup-python attempt left an incomplete copy there without pip.
           $python = $null
           foreach ($candidate in ($candidates | Select-Object -Unique)) {
             try {
               $version = (& $candidate --version 2>&1 | Out-String).Trim()
-              Write-Host "Checking $candidate -> $version"
               $majorMinor = (& $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null | Out-String).Trim()
-              if ($LASTEXITCODE -eq 0 -and $majorMinor -eq '3.12') {
+              $pipCheck = (& $candidate -c "import pip; print(pip.__version__)" 2>&1 | Out-String).Trim()
+              Write-Host "Checking $candidate -> $version | pip=$pipCheck"
+              if ($LASTEXITCODE -eq 0 -and $majorMinor -eq '3.12' -and $pipCheck -notmatch 'No module named pip') {
                 $python = (Resolve-Path $candidate).Path
                 break
               }
-            } catch {
-              Write-Host "Unable to execute $candidate"
-            }
+            } catch { Write-Host "Unable to validate $candidate" }
           }
 
           if (-not $python) {
-            throw "Python 3.12 was not found for the Windows runner account. The diagnostic output above shows the paths visible to the runner."
+            throw "No usable Python 3.12 installation with pip was found for the Windows runner account. The runner toolcache copy is intentionally rejected because it is incomplete."
           }
 
-          Write-Host "Using installed Python 3.12: $python"
+          Write-Host "Using usable Python 3.12: $python"
           & $python --version
-          & $python -c "import sys; print(sys.executable); print('UTF-8 mode:', sys.flags.utf8_mode)"
+          & $python -c "import sys, pip; print(sys.executable); print('pip:', pip.__version__); print('UTF-8 mode:', sys.flags.utf8_mode)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $pythonDir = Split-Path $python
@@ -155,20 +148,23 @@ jobs:
           "$(Join-Path $pythonDir 'Scripts')" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "PYTHON_312_PATH=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
-      - name: Verify Python 3.12
+      - name: Verify Python 3.12 and pip
         shell: powershell
         run: |
           $python = $env:PYTHON_312_PATH
           if (-not $python) { throw "PYTHON_312_PATH was not set." }
           & $python --version
-          & $python -c "import sys; assert sys.version_info[:2] == (3,12); print(sys.executable); print(sys.version); print('UTF-8 mode:', sys.flags.utf8_mode)"
+          & $python -c "import sys, pip; assert sys.version_info[:2] == (3,12); print(sys.executable); print(sys.version); print('pip:', pip.__version__); print('UTF-8 mode:', sys.flags.utf8_mode)"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Install project
-        shell: cmd
+        shell: powershell
         run: |
-          python --version
-          python -m pip install --disable-pip-version-check -e .
+          $python = $env:PYTHON_312_PATH
+          if (-not $python) { throw "PYTHON_312_PATH was not set." }
+          & $python --version
+          & $python -m pip install --disable-pip-version-check -e .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Validate required secrets
         shell: cmd
@@ -193,42 +189,49 @@ jobs:
           echo Telegram notifier configuration is present.
 
       - name: Diagnose AI providers
-        shell: cmd
+        shell: powershell
         run: |
-          python scripts\diagnose_ai_providers.py
+          & $env:PYTHON_312_PATH scripts\diagnose_ai_providers.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Run Moomoo OpenD universe paper pipeline for full regular session
-        shell: cmd
+        shell: powershell
         env:
           OPENAI_API_KEY: ""
         run: |
-          echo MOOMOO_SIGNAL_UNIVERSE=default broad US universe
-          echo MOOMOO_SIGNAL_CANDLES=%MOOMOO_SIGNAL_CANDLES%
-          echo MOOMOO_SIGNAL_INTERVAL=%MOOMOO_SIGNAL_INTERVAL%
-          echo MOOMOO_SIGNAL_MAX_AI_CANDIDATES=%MOOMOO_SIGNAL_MAX_AI_CANDIDATES%
-          echo MOOMOO_SIGNAL_MAX_PAPER_TRADES=%MOOMOO_SIGNAL_MAX_PAPER_TRADES%
-          echo MOOMOO_SIGNAL_CYCLE_MINUTES=%MOOMOO_SIGNAL_CYCLE_MINUTES%
-          echo MOOMOO_SIGNAL_SCAN_DELAY_SECONDS=%MOOMOO_SIGNAL_SCAN_DELAY_SECONDS%
-          echo MOOMOO_SIGNAL_SUBSCRIPTION_BATCH_SIZE=%MOOMOO_SIGNAL_SUBSCRIPTION_BATCH_SIZE%
-          echo SESSION_RUN_UNTIL_CLOSE=%SESSION_RUN_UNTIL_CLOSE%
-          echo EXECUTE_PAPER=%EXECUTE_PAPER%
-          echo MOOMOO_PAPER_TRADING_ENABLED=%MOOMOO_PAPER_TRADING_ENABLED%
-          echo MOOMOO_LIVE_TRADING_ENABLED=%MOOMOO_LIVE_TRADING_ENABLED%
-          echo TRADINGAGENTS_LIGHTWEIGHT_PAPER_AI=%TRADINGAGENTS_LIGHTWEIGHT_PAPER_AI%
-          echo GEMINI_PAPER_AI_MODEL=%GEMINI_PAPER_AI_MODEL%
-          echo GEMINI_PAPER_AI_TIMEOUT_SECONDS=%GEMINI_PAPER_AI_TIMEOUT_SECONDS%
-          echo AI_HEDGE_FUND_STARTING_CAPITAL=%AI_HEDGE_FUND_STARTING_CAPITAL%
-          echo AI_HEDGE_FUND_MAX_CAPITAL_DEPLOYED=%AI_HEDGE_FUND_MAX_CAPITAL_DEPLOYED%
-          echo AI_HEDGE_FUND_RISK_PER_TRADE_PCT=%AI_HEDGE_FUND_RISK_PER_TRADE_PCT%
-          echo AI_HEDGE_FUND_MAX_POSITIONS=%AI_HEDGE_FUND_MAX_POSITIONS%
-          echo AI_HEDGE_FUND_MAX_DAILY_LOSS=%AI_HEDGE_FUND_MAX_DAILY_LOSS%
-          echo AI_HEDGE_FUND_LIVE_TRADING_ARMED=%AI_HEDGE_FUND_LIVE_TRADING_ARMED%
-          echo AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS=%AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS%
-          python scripts\run_moomoo_signal_pipeline.py
+          echo "MOOMOO_SIGNAL_UNIVERSE=default broad US universe"
+          echo "MOOMOO_SIGNAL_CANDLES=$env:MOOMOO_SIGNAL_CANDLES"
+          echo "MOOMOO_SIGNAL_INTERVAL=$env:MOOMOO_SIGNAL_INTERVAL"
+          echo "MOOMOO_SIGNAL_MAX_AI_CANDIDATES=$env:MOOMOO_SIGNAL_MAX_AI_CANDIDATES"
+          echo "MOOMOO_SIGNAL_MAX_PAPER_TRADES=$env:MOOMOO_SIGNAL_MAX_PAPER_TRADES"
+          echo "MOOMOO_SIGNAL_CYCLE_MINUTES=$env:MOOMOO_SIGNAL_CYCLE_MINUTES"
+          echo "MOOMOO_SIGNAL_SCAN_DELAY_SECONDS=$env:MOOMOO_SIGNAL_SCAN_DELAY_SECONDS"
+          echo "MOOMOO_SIGNAL_SUBSCRIPTION_BATCH_SIZE=$env:MOOMOO_SIGNAL_SUBSCRIPTION_BATCH_SIZE"
+          echo "SESSION_RUN_UNTIL_CLOSE=$env:SESSION_RUN_UNTIL_CLOSE"
+          echo "EXECUTE_PAPER=$env:EXECUTE_PAPER"
+          echo "MOOMOO_PAPER_TRADING_ENABLED=$env:MOOMOO_PAPER_TRADING_ENABLED"
+          echo "MOOMOO_LIVE_TRADING_ENABLED=$env:MOOMOO_LIVE_TRADING_ENABLED"
+          echo "TRADINGAGENTS_LIGHTWEIGHT_PAPER_AI=$env:TRADINGAGENTS_LIGHTWEIGHT_PAPER_AI"
+          echo "GEMINI_PAPER_AI_MODEL=$env:GEMINI_PAPER_AI_MODEL"
+          echo "GEMINI_PAPER_AI_TIMEOUT_SECONDS=$env:GEMINI_PAPER_AI_TIMEOUT_SECONDS"
+          echo "AI_HEDGE_FUND_STARTING_CAPITAL=$env:AI_HEDGE_FUND_STARTING_CAPITAL"
+          echo "AI_HEDGE_FUND_MAX_CAPITAL_DEPLOYED=$env:AI_HEDGE_FUND_MAX_CAPITAL_DEPLOYED"
+          echo "AI_HEDGE_FUND_RISK_PER_TRADE_PCT=$env:AI_HEDGE_FUND_RISK_PER_TRADE_PCT"
+          echo "AI_HEDGE_FUND_MAX_POSITIONS=$env:AI_HEDGE_FUND_MAX_POSITIONS"
+          echo "AI_HEDGE_FUND_MAX_DAILY_LOSS=$env:AI_HEDGE_FUND_MAX_DAILY_LOSS"
+          echo "AI_HEDGE_FUND_LIVE_TRADING_ARMED=$env:AI_HEDGE_FUND_LIVE_TRADING_ARMED"
+          echo "AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS=$env:AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS"
+          & $env:PYTHON_312_PATH scripts\run_moomoo_signal_pipeline.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Send paper day summary to dedicated Telegram
         if: always()
-        shell: cmd
+        shell: powershell
         run: |
-          python --version
-          python scripts\send_paper_day_summary.py
+          if ($env:PYTHON_312_PATH) {
+            & $env:PYTHON_312_PATH --version
+            & $env:PYTHON_312_PATH scripts\send_paper_day_summary.py
+            exit $LASTEXITCODE
+          }
+          Write-Host "PYTHON_312_PATH unavailable; skipping summary because Python bootstrap failed."
+          exit 0
