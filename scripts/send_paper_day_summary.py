@@ -48,10 +48,8 @@ def format_trade_block(symbol: str, *, side: str, quantity: float, entry_price: 
                        stop_price: float | None, target_price: float | None,
                        exit_quantity: float | None, exit_price: float | None,
                        pnl: float | None, reason: str | None) -> str:
-    lines = [symbol]
-    direction = "LONG" if side == "BUY" else "SHORT"
-    lines.append(f"  {direction} { _qty(quantity) }")
-    lines.append(f"  Entry {_qty(quantity)} @ {_money(entry_price)}")
+    """Render one complete lifecycle in the compact Telegram layout."""
+    lines = [symbol, f"  Entry {_qty(quantity)} @ {_money(entry_price)}"]
     if target_price is not None:
         lines.append(f"  Target {_money(target_price)}")
     if stop_price is not None:
@@ -64,12 +62,11 @@ def format_trade_block(symbol: str, *, side: str, quantity: float, entry_price: 
 
 
 def _journal_block(entry: TradeJournalEntry) -> str:
-    pnl = entry.realized_pnl
     return format_trade_block(
         entry.symbol, side=entry.side, quantity=entry.quantity, entry_price=entry.entry_price,
         stop_price=entry.stop_price, target_price=entry.target_price,
         exit_quantity=entry.exit_quantity, exit_price=entry.exit_price,
-        pnl=pnl, reason=entry.exit_reason,
+        pnl=entry.realized_pnl, reason=entry.exit_reason,
     )
 
 
@@ -78,8 +75,7 @@ def _legacy_blocks(execution, state_store, filled) -> tuple[list[str], float, in
     blocks: list[str] = []
     pnl_total = 0.0
     pnl_count = 0
-    symbols = sorted({row["symbol"] for row in filled})
-    for symbol in symbols:
+    for symbol in sorted({row["symbol"] for row in filled}):
         state = state_store.get(symbol)
         if state is None:
             continue
@@ -91,11 +87,11 @@ def _legacy_blocks(execution, state_store, filled) -> tuple[list[str], float, in
         ]
         exit_side = "SELL" if state.side == "BUY" else "BUY"
         exit_rows = [row for row in symbol_fills if row["side"] == exit_side]
-        if not entry_rows and not exit_rows:
-            continue
         entry_row = entry_rows[-1] if entry_rows else None
         entry_qty = entry_row["filled_quantity"] if entry_row else abs(state.quantity)
         entry_price = entry_row["filled_price"] if entry_row else state.entry_price
+        if not entry_row and not exit_rows:
+            continue
         if exit_rows:
             row = exit_rows[-1]
             reason = _classify_exit(state.side, row["filled_price"], state.stop_price, state.target_price)
@@ -105,8 +101,7 @@ def _legacy_blocks(execution, state_store, filled) -> tuple[list[str], float, in
             blocks.append(format_trade_block(
                 symbol, side=state.side, quantity=entry_qty, entry_price=entry_price,
                 stop_price=state.stop_price, target_price=state.target_price,
-                exit_quantity=row["filled_quantity"], exit_price=row["filled_price"],
-                pnl=pnl, reason=reason,
+                exit_quantity=row["filled_quantity"], exit_price=row["filled_price"], pnl=pnl, reason=reason,
             ))
         else:
             blocks.append(format_trade_block(
@@ -136,7 +131,6 @@ def build_summary() -> str:
         pnl_total = sum(entry.realized_pnl or 0.0 for entry in completed)
         pnl_count = len(completed)
 
-        # Preserve visibility for historical trades created before the journal existed.
         journal_symbols = {entry.symbol for entry in journal}
         legacy_filled = [row for row in filled if row["symbol"] not in journal_symbols]
         legacy_blocks, legacy_pnl, legacy_count = _legacy_blocks(execution, state_store, legacy_filled)
@@ -149,9 +143,7 @@ def build_summary() -> str:
         for row in current_positions:
             state = state_store.get(row["symbol"])
             if state is None:
-                handoffs.append(
-                    f"{row['symbol']}\n  Target/Stop history unavailable\n  Manual review required"
-                )
+                handoffs.append(f"{row['symbol']}\n  Target/Stop history unavailable\n  Manual review required")
                 continue
             side = "LONG" if state.side == "BUY" else "SHORT"
             handoffs.append(
@@ -168,15 +160,16 @@ def build_summary() -> str:
             "Environment: Moomoo US SIMULATE / PAPER",
             "Live trading: DISABLED",
             "",
+            "📈 TRADES",
+            "",
         ]
         if blocks:
-            message.extend(["📈 TRADES", ""])
             for index, block in enumerate(blocks):
                 if index:
                     message.append("")
                 message.append(block)
         else:
-            message.extend(["📈 TRADES", "  None"])
+            message.append("  None")
 
         message.extend([
             "",
