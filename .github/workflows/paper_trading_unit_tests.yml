@@ -1,0 +1,17 @@
+name: Paper Trading Unit Tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: [self-hosted, Windows, X64]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+
+      - name: Run trade journal and lifecycle unit tests
+        shell: cmd
+        run: |
+          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -m pytest tests\paper_trading\test_trade_journal_v2.py tests\paper_trading\test_moomoo_lifecycle_journal.py -q
