@@ -127,11 +127,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
           $pythonDir = Split-Path $python
-          "PYTHON_EXECUTABLE=$python" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PYTHON_ROOT=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          "PYTHON_312_FOUND=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "$pythonDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
           "$(Join-Path $pythonDir 'Scripts')" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          "PYTHON_312_FOUND=true" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Provision Python 3.12 when runner has none
         if: env.PYTHON_312_FOUND != 'true'
@@ -143,28 +141,21 @@ jobs:
       - name: Finalize Python executable
         shell: powershell
         run: |
-          if ($env:PYTHON_312_FOUND -ne "true") {
-            $pythonCommand = Get-Command python.exe -ErrorAction Stop
-            $python = $pythonCommand.Source
-            $majorMinor = (& $python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" | Out-String).Trim()
-            if ($majorMinor -ne "3.12") {
-              throw "Python setup action did not provide Python 3.12; detected $majorMinor at $python"
-            }
-            $resolved = (Resolve-Path $python).Path
-            $pythonDir = Split-Path $resolved
-            "PYTHON_EXECUTABLE=$resolved" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-            "PYTHON_ROOT=$pythonDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-            "$pythonDir" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-            "$(Join-Path $pythonDir 'Scripts')" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          $pythonCommand = Get-Command python.exe -ErrorAction Stop
+          $python = $pythonCommand.Source
+          $majorMinor = (& $python -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" | Out-String).Trim()
+          if ($majorMinor -ne "3.12") {
+            throw "Python setup/discovery did not provide Python 3.12; detected $majorMinor at $python"
           }
-          Write-Host "Using Python: $env:PYTHON_EXECUTABLE"
-          & $env:PYTHON_EXECUTABLE --version
-          & $env:PYTHON_EXECUTABLE -c "import sys; assert sys.version_info[:2] == (3,12); print(sys.executable); print(sys.version); print('UTF-8 mode:', sys.flags.utf8_mode)"
+          Write-Host "Using Python from PATH: $python"
+          & $python --version
+          & $python -c "import sys; assert sys.version_info[:2] == (3,12); print(sys.executable); print(sys.version); print('UTF-8 mode:', sys.flags.utf8_mode)"
 
       - name: Install project
         shell: cmd
         run: |
-          "%PYTHON_EXECUTABLE%" -m pip install --disable-pip-version-check -e .
+          python --version
+          python -m pip install --disable-pip-version-check -e .
 
       - name: Validate required secrets
         shell: cmd
@@ -191,7 +182,7 @@ jobs:
       - name: Diagnose AI providers
         shell: cmd
         run: |
-          "%PYTHON_EXECUTABLE%" scripts\diagnose_ai_providers.py
+          python scripts\diagnose_ai_providers.py
 
       - name: Run Moomoo OpenD universe paper pipeline for full regular session
         shell: cmd
@@ -223,10 +214,11 @@ jobs:
           echo AI_HEDGE_FUND_MAX_DAILY_LOSS=%AI_HEDGE_FUND_MAX_DAILY_LOSS%
           echo AI_HEDGE_FUND_LIVE_TRADING_ARMED=%AI_HEDGE_FUND_LIVE_TRADING_ARMED%
           echo AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS=%AI_HEDGE_FUND_ALLOW_EXTENDED_HOURS%
-          "%PYTHON_EXECUTABLE%" scripts\run_moomoo_signal_pipeline.py
+          python scripts\run_moomoo_signal_pipeline.py
 
       - name: Send paper day summary to dedicated Telegram
         if: always()
         shell: cmd
         run: |
-          "%PYTHON_EXECUTABLE%" scripts\send_paper_day_summary.py
+          python --version
+          python scripts\send_paper_day_summary.py
