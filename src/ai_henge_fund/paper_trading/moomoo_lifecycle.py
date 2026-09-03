@@ -11,6 +11,7 @@ from ai_henge_fund.alerts.telegram import TelegramNotifier
 from ai_henge_fund.execution.moomoo_order_monitor import FILLED_ALL, MoomooPaperOrderMonitor
 from ai_henge_fund.execution.moomoo_paper import MoomooPaperExecution
 from ai_henge_fund.paper_trading.engine import PaperTrade
+from ai_henge_fund.paper_trading.trade_journal import TradeJournal
 from ai_henge_fund.portfolio.manager import PositionManager
 from ai_henge_fund.portfolio.persistent_trade_state import PersistentTradeStateStore
 
@@ -41,6 +42,7 @@ class MoomooPaperTradeLifecycle:
         self._target_orders: dict[str, str] = {}
         self._quote = OpenQuoteContext(host="127.0.0.1", port=11111)
         self._state = PersistentTradeStateStore()
+        self._trade_journal = TradeJournal()
 
     def close(self) -> None:
         for stop_event, _thread in list(self._watchers.values()):
@@ -330,8 +332,19 @@ class MoomooPaperTradeLifecycle:
                 "Manual review required."
             )
             return
+        trade_id = f"moomoo-{state.broker_order_id}"
+        self._trade_journal.record_exit(
+            trade_id=trade_id,
+            entry_side=state.side,
+            entry_price=float(state.entry_price),
+            quantity=float(trade.quantity),
+            exit_price=float(price),
+            reason=reason,
+            broker_exit_order_id=order_id,
+            exited_at=trade.executed_at,
+        )
         self._state.record_exit(
-            trade_id=f"moomoo-{state.broker_order_id}", quantity=trade.quantity, exit_price=price,
+            trade_id=trade_id, quantity=trade.quantity, exit_price=price,
             exit_reason=reason, broker_exit_order_id=order_id, closed_at=trade.executed_at,
         )
 
