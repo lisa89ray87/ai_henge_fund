@@ -19,16 +19,16 @@ def test_long_target_trade_uses_requested_telegram_layout():
     )
 
 
-def test_short_stop_trade_calculates_and_formats_negative_pnl():
+def test_long_stop_trade_formats_negative_pnl():
     block = format_trade_block(
-        "LCID", side="SELL", quantity=1000, entry_price=4.72,
+        "LCID", side="BUY", quantity=1000, entry_price=4.72,
         stop_price=4.67, target_price=None,
-        exit_quantity=1000, exit_price=4.67, pnl=-50.0, reason="STOP",
+        exit_quantity=1000, exit_price=4.67, pnl=-45.0, reason="STOP",
     )
 
     assert "LCID" in block
     assert "Entry 1000 @ 4.72" in block
     assert "Stop 4.67" in block
     assert "Exit 1000 @ 4.67" in block
-    assert "P/L -50.00" in block
+    assert "P/L -45.00" in block
     assert "Reason STOP" in block
