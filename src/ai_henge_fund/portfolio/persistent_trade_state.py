@@ -116,6 +116,37 @@ class PersistentTradeStateStore:
                 "broker_order_id": broker_order_id, "status": status, "updated_at": now,
             })
 
+    def get(self, symbol: str) -> TradeState | None:
+        normalized = symbol.strip().upper()
+        with session_scope() as session:
+            row = session.execute(text("""
+                SELECT symbol, side, quantity, entry_price, stop_price, target_price,
+                       broker_order_id, status, updated_at
+                FROM paper_trade_states
+                WHERE symbol = :symbol
+            """), {"symbol": normalized}).mappings().first()
+        return self._state(row) if row is not None else None
+
+    def open_states(self) -> list[TradeState]:
+        with session_scope() as session:
+            rows = session.execute(text("""
+                SELECT symbol, side, quantity, entry_price, stop_price, target_price,
+                       broker_order_id, status, updated_at
+                FROM paper_trade_states
+                WHERE status IN ('OPEN', 'PARTIAL')
+                ORDER BY symbol
+            """)).mappings().all()
+        return [self._state(row) for row in rows]
+
+    def mark_closed(self, symbol: str) -> None:
+        normalized = symbol.strip().upper()
+        with session_scope() as session:
+            session.execute(text("""
+                UPDATE paper_trade_states
+                SET status = 'CLOSED', updated_at = :updated_at
+                WHERE symbol = :symbol
+            """), {"symbol": normalized, "updated_at": datetime.now(timezone.utc)})
+
     def record_open(self, *, trade_id: str, symbol: str, side: str, quantity: float,
                     entry_price: float, stop_price: float | None, target_price: float | None,
                     broker_entry_order_id: str | None, opened_at: datetime | None = None) -> None:

@@ -12,13 +12,26 @@ from ai_henge_fund.portfolio.manager import PositionManager
 class Runner:
     def analyze(self, payload):
         assert payload["capabilities"]["orders"] is False
-        return {"decision": "BUY", "confidence": 0.90, "rationale": "test confirmation"}
+        return {
+            "decision": "BUY",
+            "confidence": 0.90,
+            "rationale": "test confirmation",
+            "quantity": 1,
+            "entry_price": 100.0,
+            "stop_price": 99.0,
+            "target_price": 110.0,
+        }
 
 
 def test_pipeline_opens_paper_position_only_after_all_gates():
     snapshot = SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
-        market_state="REGULAR", candles=tuple({"close": x} for x in [100, 101, 103]),
+        market_state="REGULAR",
+        candles=(
+            {"close": 100, "low": 99, "high": 101},
+            {"close": 101, "low": 100, "high": 102},
+            {"close": 103, "low": 101, "high": 104},
+        ),
         data_source="test", data_quality="LIVE",
     )
     pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(Runner()))
@@ -75,7 +88,16 @@ def test_pipeline_opens_paper_position_only_after_all_gates():
     # Instead of constructing via MoomooPaperTradeLifecycle (which uses FILLED_ALL),
     # create the result directly when `open` is called by the pipeline.
     class LifecycleProxy:
-        def open(self, *, symbol: str, side: str, quantity: float, price: float):
+        def open(
+            self,
+            *,
+            symbol: str,
+            side: str,
+            quantity: float,
+            price: float,
+            stop_price: float | None,
+            target_price: float | None,
+        ):
             trade = PaperTrade(
                 trade_id="paper-12345",
                 symbol=symbol,

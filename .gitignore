@@ -11,3 +11,4 @@ build/
 dist/
 *.egg-info/
 test.bat
+ai_henge_fund_test.db

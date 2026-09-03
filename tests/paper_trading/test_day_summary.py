@@ -1,4 +1,33 @@
+from ai_henge_fund.portfolio.persistent_trade_state import PersistentTradeStateStore
 from scripts.send_paper_day_summary import format_trade_block
+
+
+def test_persistent_trade_state_store_get_by_symbol_returns_saved_state():
+    store = PersistentTradeStateStore()
+    store.upsert(
+        symbol="US.AAPL",
+        side="BUY",
+        quantity=10,
+        entry_price=100.0,
+        stop_price=99.0,
+        target_price=110.0,
+        broker_order_id="abc-123",
+        status="OPEN",
+    )
+
+    state = store.get("us.aapl")
+    assert state is not None
+    assert state.symbol == "US.AAPL"
+    assert state.side == "BUY"
+    assert state.quantity == 10
+    assert state.entry_price == 100.0
+    assert state.stop_price == 99.0
+    assert state.target_price == 110.0
+
+    store.mark_closed("US.AAPL")
+    closed = store.get("US.AAPL")
+    assert closed is not None
+    assert closed.status == "CLOSED"
 
 
 def test_long_target_trade_uses_requested_telegram_layout():

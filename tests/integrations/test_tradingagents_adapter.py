@@ -1,3 +1,5 @@
+import sys
+import types
 from datetime import date
 
 import pytest
@@ -19,9 +21,23 @@ def test_adapter_defers_optional_import(monkeypatch):
         def propagate(self, symbol, analysis_date):
             return ({"trace": True}, {"action": "BUY", "confidence": 0.8})
 
-    import tradingagents.graph.trading_graph as trading_graph
+    class FakeTradingAgentsConfig:
+        def __init__(self, **kwargs):
+            self.__dict__.update(kwargs)
 
-    monkeypatch.setattr(trading_graph, "TradingAgentsGraph", FakeGraph)
+    package = types.ModuleType("tradingagents")
+    package.__path__ = []
+    graph_package = types.ModuleType("tradingagents.graph")
+    graph_package.__path__ = []
+    config_module = types.ModuleType("tradingagents.config")
+    config_module.TradingAgentsConfig = FakeTradingAgentsConfig
+    trading_graph_module = types.ModuleType("tradingagents.graph.trading_graph")
+    trading_graph_module.TradingAgentsGraph = FakeGraph
+
+    monkeypatch.setitem(sys.modules, "tradingagents", package)
+    monkeypatch.setitem(sys.modules, "tradingagents.graph", graph_package)
+    monkeypatch.setitem(sys.modules, "tradingagents.config", config_module)
+    monkeypatch.setitem(sys.modules, "tradingagents.graph.trading_graph", trading_graph_module)
 
     result = adapter.analyze("NVDA", date(2026, 8, 14))
 
