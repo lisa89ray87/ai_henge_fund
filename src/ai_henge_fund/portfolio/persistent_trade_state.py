@@ -166,7 +166,7 @@ class PersistentTradeStateStore:
                        broker_entry_order_id, opened_at, status, exit_quantity, exit_price,
                        exit_reason, broker_exit_order_id, closed_at, realized_pnl
                 FROM paper_trade_journal WHERE trade_id = :trade_id
-            """), {"trade_id": trade_id}).mappings().first()
+            """)).mappings().first()
         return self._journal(row) if row is not None else None
 
     def journal_for_day(self, day_start: datetime, day_end: datetime) -> list[TradeJournalEntry]:
@@ -194,34 +194,21 @@ class PersistentTradeStateStore:
             """)).mappings().all()
         return [self._journal(row) for row in rows]
 
-    def get(self, symbol: str) -> TradeState | None:
+    def update_remaining_quantity(self, *, symbol: str, quantity: float, status: str = "OPEN") -> None:
+        """Update the current symbol state after a partial broker exit."""
+        if quantity <= 0:
+            raise ValueError("remaining quantity must be positive")
         with session_scope() as session:
-            row = session.execute(text("""
-                SELECT symbol, side, quantity, entry_price, stop_price, target_price,
-                       broker_order_id, status, updated_at
-                FROM paper_trade_states WHERE symbol = :symbol
-            """), {"symbol": symbol.strip().upper()}).mappings().first()
-        if row is None:
-            return None
-        return self._state(row)
-
-    def mark_closed(self, symbol: str) -> None:
-        with session_scope() as session:
-            session.execute(text("""
+            result = session.execute(text("""
                 UPDATE paper_trade_states
-                SET status = 'CLOSED', updated_at = :updated_at
-                WHERE symbol = :symbol
-            """), {"symbol": symbol.strip().upper(), "updated_at": datetime.now(timezone.utc)})
-
-    def open_states(self) -> list[TradeState]:
-        with session_scope() as session:
-            rows = session.execute(text("""
-                SELECT symbol, side, quantity, entry_price, stop_price, target_price,
-                       broker_order_id, status, updated_at
-                FROM paper_trade_states WHERE status = 'OPEN'
-                ORDER BY symbol
-            """)).mappings().all()
-        return [self._state(row) for row in rows]
+                SET quantity = :quantity, status = :status, updated_at = :updated_at
+                WHERE symbol = :symbol AND status = 'OPEN'
+            """), {
+                "symbol": symbol.strip().upper(), "quantity": quantity,
+                "status": status.upper(), "updated_at": datetime.now(timezone.utc),
+            })
+            if result.rowcount == 0:
+                raise ValueError(f"no open saved trade state for {symbol}")
 
     @staticmethod
     def _state(row) -> TradeState:
