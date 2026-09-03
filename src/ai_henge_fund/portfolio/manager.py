@@ -62,6 +62,35 @@ class PositionManager:
         self._positions[symbol] = position
         return position
 
+    def reduce(self, symbol: str, quantity: float) -> Position | None:
+        """Reduce an open position by ``quantity`` while preserving protection metadata.
+
+        Returns the remaining position, or ``None`` when the reduction closes it.
+        """
+        symbol = symbol.strip().upper()
+        position = self.get(symbol)
+        if position is None:
+            raise ValueError(f"no open position for {symbol}")
+        if quantity <= 0:
+            raise ValueError("reduction quantity must be positive")
+        current = abs(position.quantity)
+        if quantity > current:
+            raise ValueError(f"reduction quantity {quantity} exceeds position quantity {current}")
+        remaining = current - quantity
+        if remaining == 0:
+            return self.close(symbol) and None
+        signed_remaining = remaining if position.quantity > 0 else -remaining
+        updated = Position(
+            symbol=symbol,
+            quantity=signed_remaining,
+            average_price=position.average_price,
+            opened_at=position.opened_at,
+            stop_price=position.stop_price,
+            target_price=position.target_price,
+        )
+        self._positions[symbol] = updated
+        return updated
+
     def close(self, symbol: str) -> Position:
         symbol = symbol.strip().upper()
         position = self._positions.pop(symbol, None)
