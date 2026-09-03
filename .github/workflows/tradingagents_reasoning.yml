@@ -23,16 +23,15 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Check Python
-        shell: cmd
+      - name: Locate valid Python 3.12
+        shell: powershell
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" --version
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -c "import sys; print(sys.executable)"
+          & "$env:GITHUB_WORKSPACE\scripts\resolve_python312.ps1"
 
       - name: Install project
-        shell: cmd
+        shell: powershell
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -m pip install -e .
+          & $env:PYTHON_312_PATH -m pip install -e .
 
       - name: Validate required secrets are configured
         shell: powershell
@@ -59,6 +58,6 @@ jobs:
           }
 
       - name: Run real TradingAgents reasoning boundary
-        shell: cmd
+        shell: powershell
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" scripts/run_tradingagents_reasoning.py
+          & $env:PYTHON_312_PATH scripts/run_tradingagents_reasoning.py

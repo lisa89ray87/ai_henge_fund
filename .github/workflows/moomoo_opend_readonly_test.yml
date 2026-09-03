@@ -11,18 +11,17 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Check Python
-        shell: cmd
+      - name: Locate valid Python 3.12
+        shell: powershell
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" --version
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -c "import sys; print(sys.executable)"
+          & "$env:GITHUB_WORKSPACE\scripts\resolve_python312.ps1"
 
       - name: Check Moomoo SDK
-        shell: cmd
+        shell: powershell
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -c "import moomoo; print('Moomoo SDK: PASS')"
+          & $env:PYTHON_312_PATH -c "import moomoo; print('Moomoo SDK: PASS')"
 
       - name: Verify Moomoo OpenD read-only market data
-        shell: cmd
+        shell: powershell
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" scripts/test_moomoo_my_readonly.py
+          & $env:PYTHON_312_PATH scripts/test_moomoo_my_readonly.py

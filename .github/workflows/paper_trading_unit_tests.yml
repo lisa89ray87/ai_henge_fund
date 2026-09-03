@@ -18,7 +18,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v5
 
-      - name: Run trade journal, lifecycle, and position unit tests
-        shell: cmd
+      - name: Locate valid Python 3.12
+        shell: powershell
         run: |
-          "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe" -m pytest tests\paper_trading\test_trade_journal_v2.py tests\paper_trading\test_moomoo_lifecycle_journal.py tests\paper_trading\test_partial_position.py -q
+          & "$env:GITHUB_WORKSPACE\scripts\resolve_python312.ps1"
+
+      - name: Run trade journal, lifecycle, and position unit tests
+        shell: powershell
+        run: |
+          & $env:PYTHON_312_PATH -m pytest tests\paper_trading\test_trade_journal_v2.py tests\paper_trading\test_moomoo_lifecycle_journal.py tests\paper_trading\test_partial_position.py -q
