@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from ai_henge_fund.alerts.telegram import TelegramNotifier
 from ai_henge_fund.config.telegram import day_summary_telegram_config_from_env
 from ai_henge_fund.execution.moomoo_paper import MoomooPaperExecution
+from ai_henge_fund.paper_trading.trade_journal import TradeJournal
 from ai_henge_fund.portfolio.persistent_trade_state import PersistentTradeStateStore, TradeJournalEntry
 
 ET = ZoneInfo("America/New_York")
@@ -48,12 +49,17 @@ def format_trade_block(symbol: str, *, side: str, quantity: float, entry_price: 
                        stop_price: float | None, target_price: float | None,
                        exit_quantity: float | None, exit_price: float | None,
                        pnl: float | None, reason: str | None) -> str:
-    """Render one complete lifecycle in the compact Telegram layout."""
+    """Render one lifecycle in the compact Telegram layout."""
     lines = [symbol, f"  Entry {_qty(quantity)} @ {_money(entry_price)}"]
-    if target_price is not None:
+    if reason == "TARGET" and target_price is not None:
         lines.append(f"  Target {_money(target_price)}")
-    if stop_price is not None:
+    elif reason == "STOP" and stop_price is not None:
         lines.append(f"  Stop {_money(stop_price)}")
+    elif exit_price is None:
+        if target_price is not None:
+            lines.append(f"  Target {_money(target_price)}")
+        if stop_price is not None:
+            lines.append(f"  Stop {_money(stop_price)}")
     if exit_price is not None:
         lines.append(f"  Exit {_qty(exit_quantity or quantity)} @ {_money(exit_price)}")
         lines.append(f"  P/L {'+' if (pnl or 0) >= 0 else ''}{_money(pnl)}")
@@ -61,13 +67,32 @@ def format_trade_block(symbol: str, *, side: str, quantity: float, entry_price: 
     return "\n".join(lines)
 
 
-def _journal_block(entry: TradeJournalEntry) -> str:
-    return format_trade_block(
-        entry.symbol, side=entry.side, quantity=entry.quantity, entry_price=entry.entry_price,
-        stop_price=entry.stop_price, target_price=entry.target_price,
-        exit_quantity=entry.exit_quantity, exit_price=entry.exit_price,
-        pnl=entry.realized_pnl, reason=entry.exit_reason,
-    )
+def _journal_block(entry: TradeJournalEntry, exits) -> tuple[str, float, int]:
+    if not exits:
+        pnl = entry.realized_pnl or 0.0
+        block = format_trade_block(
+            entry.symbol, side=entry.side, quantity=entry.quantity, entry_price=entry.entry_price,
+            stop_price=entry.stop_price, target_price=entry.target_price,
+            exit_quantity=entry.exit_quantity, exit_price=entry.exit_price,
+            pnl=entry.realized_pnl, reason=entry.exit_reason,
+        )
+        return block, pnl if entry.exit_price is not None else 0.0, 1 if entry.exit_price is not None else 0
+
+    lines = [entry.symbol, f"  Entry {_qty(entry.quantity)} @ {_money(entry.entry_price)}"]
+    total_pnl = 0.0
+    reasons: list[str] = []
+    for event in exits:
+        reason = event.reason.upper()
+        if reason == "TARGET" and entry.target_price is not None and not any(line.startswith("  Target ") for line in lines):
+            lines.append(f"  Target {_money(entry.target_price)}")
+        elif reason == "STOP" and entry.stop_price is not None and not any(line.startswith("  Stop ") for line in lines):
+            lines.append(f"  Stop {_money(entry.stop_price)}")
+        lines.append(f"  Exit {_qty(event.quantity)} @ {_money(event.exit_price)}")
+        total_pnl += event.realized_pnl
+        reasons.append(reason)
+    lines.append(f"  P/L {'+' if total_pnl >= 0 else ''}{_money(total_pnl)}")
+    lines.append(f"  Reason {reasons[-1] if len(set(reasons)) == 1 else '/'.join(reasons)}")
+    return "\n".join(lines), total_pnl, len(exits)
 
 
 def _legacy_blocks(execution, state_store, filled) -> tuple[list[str], float, int]:
@@ -115,6 +140,7 @@ def _legacy_blocks(execution, state_store, filled) -> tuple[list[str], float, in
 def build_summary() -> str:
     execution = MoomooPaperExecution()
     state_store = PersistentTradeStateStore()
+    trade_journal = TradeJournal()
     try:
         today = datetime.now(ET).date()
         day_start = datetime.combine(today, time.min, tzinfo=ET)
@@ -126,10 +152,16 @@ def build_summary() -> str:
         filled = [row for row in orders if row["status"] in FILLED and row["filled_quantity"] > 0]
 
         journal = state_store.journal_for_day(day_start, day_end)
-        completed = [entry for entry in journal if entry.exit_price is not None and entry.exit_quantity]
-        blocks = [_journal_block(entry) for entry in completed]
-        pnl_total = sum(entry.realized_pnl or 0.0 for entry in completed)
-        pnl_count = len(completed)
+        blocks: list[str] = []
+        pnl_total = 0.0
+        pnl_count = 0
+        for entry in journal:
+            exits = trade_journal.exits_for_trade(entry.trade_id)
+            if exits or entry.exit_price is not None:
+                block, pnl, count = _journal_block(entry, exits)
+                blocks.append(block)
+                pnl_total += pnl
+                pnl_count += count
 
         journal_symbols = {entry.symbol for entry in journal}
         legacy_filled = [row for row in filled if row["symbol"] not in journal_symbols]
