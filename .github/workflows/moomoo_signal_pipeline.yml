@@ -63,26 +63,68 @@ jobs:
           Write-Host "Runner identity:"
           whoami
           Write-Host "USERPROFILE=$env:USERPROFILE"
+          Write-Host "PATH python candidates:"
+          where.exe python 2>$null
+          where.exe py 2>$null
 
-          # This is the Python installation already used successfully by the
-          # self-hosted runner's paper-trading unit-test workflow. Do not use
-          # actions/setup-python here: on this Windows self-hosted runner it
-          # attempts machine-wide registry changes and requires administrator rights.
-          $candidates = @(
-            "C:\Users\limli\AppData\Local\Programs\Python\Python312\python.exe",
-            "$env:USERPROFILE\AppData\Local\Programs\Python\Python312\python.exe",
-            "C:\Python312\python.exe",
-            "C:\Program Files\Python312\python.exe"
+          # Do not use actions/setup-python here. On this Windows self-hosted
+          # runner it attempts machine-wide registry changes and requires admin rights.
+          $candidates = New-Object System.Collections.Generic.List[string]
+
+          # First prefer the Python Launcher, if installed for the runner account.
+          $pyLauncher = (Get-Command py.exe -ErrorAction SilentlyContinue).Source
+          if ($pyLauncher) {
+            Write-Host "Python Launcher: $pyLauncher"
+            try {
+              $launcherVersion = (& $pyLauncher -3.12 --version 2>&1 | Out-String).Trim()
+              Write-Host "py -3.12 -> $launcherVersion"
+              $launcherPath = (& $pyLauncher -3.12 -c "import sys; print(sys.executable)" 2>$null | Select-Object -Last 1).Trim()
+              if ($launcherPath -and (Test-Path $launcherPath)) {
+                $candidates.Add($launcherPath)
+              }
+            } catch {
+              Write-Host "Python Launcher could not resolve Python 3.12"
+            }
+          }
+
+          # Then check common per-user and machine-wide installation locations.
+          $knownRoots = @(
+            "$env:USERPROFILE\AppData\Local\Programs\Python",
+            "C:\Users\limli\AppData\Local\Programs\Python",
+            "C:\Users\runneradmin\AppData\Local\Programs\Python",
+            "C:\Users\Runner\AppData\Local\Programs\Python",
+            "C:\Python312",
+            "C:\Program Files\Python312",
+            "C:\Program Files\Python312\python.exe",
+            "D:\Python312"
           )
+          foreach ($root in $knownRoots) {
+            if ($root -like '*.exe') {
+              if (Test-Path $root) { $candidates.Add($root) }
+              continue
+            }
+            $candidate = Join-Path $root 'Python312\python.exe'
+            if (Test-Path $candidate) { $candidates.Add($candidate) }
+            $candidate = Join-Path $root 'python.exe'
+            if (Test-Path $candidate) { $candidates.Add($candidate) }
+          }
+
+          # Finally, discover Python312 installations under user profiles. This
+          # handles a runner service running as a different Windows account.
+          if (Test-Path 'C:\Users') {
+            Get-ChildItem 'C:\Users' -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+              $candidate = Join-Path $_.FullName 'AppData\Local\Programs\Python\Python312\python.exe'
+              if (Test-Path $candidate) { $candidates.Add($candidate) }
+            }
+          }
 
           $python = $null
           foreach ($candidate in ($candidates | Select-Object -Unique)) {
-            if (-not (Test-Path $candidate)) { continue }
             try {
               $version = (& $candidate --version 2>&1 | Out-String).Trim()
               Write-Host "Checking $candidate -> $version"
               $majorMinor = (& $candidate -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>$null | Out-String).Trim()
-              if ($LASTEXITCODE -eq 0 -and $majorMinor -eq "3.12") {
+              if ($LASTEXITCODE -eq 0 -and $majorMinor -eq '3.12') {
                 $python = (Resolve-Path $candidate).Path
                 break
               }
@@ -92,7 +134,7 @@ jobs:
           }
 
           if (-not $python) {
-            throw "Python 3.12 was not found. Install Python 3.12 for the runner account at C:\Users\limli\AppData\Local\Programs\Python\Python312 or another listed location."
+            throw "Python 3.12 was not found for the Windows runner account. Install Python 3.12 for that account, or expose an existing Python 3.12 installation through the Python Launcher (py -3.12)."
           }
 
           Write-Host "Using installed Python 3.12: $python"
