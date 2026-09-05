@@ -5,7 +5,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 from time import sleep
 
-from moomoo import OpenSecTradeContext, OrderType, SecurityFirm, Session, TimeInForce, TrdEnv, TrdMarket, TrdSide
+from moomoo import OpenSecTradeContext, OrderType, SecurityFirm, TrdEnv, TrdMarket, TrdSide
 
 from ai_henge_fund.config.settings import get_settings
 
@@ -59,34 +59,6 @@ class MoomooPaperExecution:
 
     def place_market(self, *, symbol: str, side: str, quantity: int) -> MoomooPaperOrder:
         return self._place(symbol=symbol, side=side, quantity=quantity, price=0.0, order_type=OrderType.MARKET)
-
-    def place_stop_limit(
-        self,
-        *,
-        symbol: str,
-        side: str,
-        quantity: int,
-        stop_price: float,
-        limit_price: float | None = None,
-        session: Session = Session.ETH,
-    ) -> MoomooPaperOrder:
-        """Place broker-side stop-limit protection for the supported US ETH session."""
-        if stop_price <= 0:
-            raise ValueError("stop_price must be greater than zero")
-        trigger = self.normalize_price(stop_price)
-        limit = self.normalize_price(limit_price if limit_price is not None else stop_price)
-        if limit <= 0:
-            raise ValueError("limit_price must be greater than zero")
-        return self._place(
-            symbol=symbol,
-            side=side,
-            quantity=quantity,
-            price=limit,
-            order_type=OrderType.STOP_LIMIT,
-            aux_price=trigger,
-            time_in_force=TimeInForce.DAY,
-            session=session,
-        )
 
     def verify_limit_order(self, order: MoomooPaperOrder, *, attempts: int = 3, delay_seconds: float = 0.5) -> MoomooPaperOrder:
         expected_side = order.side.upper()
@@ -210,21 +182,10 @@ class MoomooPaperExecution:
             })
         return rows
 
-    def _place(
-        self,
-        *,
-        symbol: str,
-        side: str,
-        quantity: int,
-        price: float,
-        order_type,
-        aux_price: float | None = None,
-        time_in_force: TimeInForce = TimeInForce.DAY,
-        session: Session = Session.NONE,
-    ) -> MoomooPaperOrder:
+    def _place(self, *, symbol: str, side: str, quantity: int, price: float, order_type) -> MoomooPaperOrder:
         if quantity <= 0:
             raise ValueError("quantity must be greater than zero")
-        if order_type in {OrderType.NORMAL, OrderType.STOP_LIMIT} and price <= 0:
+        if order_type == OrderType.NORMAL and price <= 0:
             raise ValueError("limit order price must be greater than zero")
         side = side.upper()
         if side not in {"BUY", "SELL"}:
@@ -233,8 +194,7 @@ class MoomooPaperExecution:
         if not symbol:
             raise ValueError("symbol must not be empty")
 
-        normalized_price = self.normalize_price(price) if order_type in {OrderType.NORMAL, OrderType.STOP_LIMIT} else 0.0
-        normalized_aux_price = self.normalize_price(aux_price) if aux_price is not None else None
+        normalized_price = self.normalize_price(price) if order_type == OrderType.NORMAL else 0.0
         trd_side = TrdSide.BUY if side == "BUY" else TrdSide.SELL
         ret, data = self._ctx.place_order(
             price=normalized_price,
@@ -243,9 +203,6 @@ class MoomooPaperExecution:
             trd_side=trd_side,
             order_type=order_type,
             trd_env=TrdEnv.SIMULATE,
-            time_in_force=time_in_force,
-            aux_price=normalized_aux_price,
-            session=session,
         )
         if ret != 0:
             raise RuntimeError(f"Moomoo paper order rejected: {data}")
