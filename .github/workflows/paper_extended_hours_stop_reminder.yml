@@ -1,0 +1,60 @@
+name: Paper Extended-Hours Stop Reminder
+
+on:
+  workflow_dispatch:
+  schedule:
+    # GitHub cron is UTC. Run both DST possibilities; the script checks
+    # America/New_York and only sends at 03:55 or 15:55 local time.
+    - cron: "55 8 * * 1-5"
+    - cron: "55 9 * * 1-5"
+    - cron: "55 19 * * 1-5"
+    - cron: "55 20 * * 1-5"
+
+concurrency:
+  group: paper-extended-hours-stop-reminder
+  cancel-in-progress: false
+
+jobs:
+  reminder:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN }}
+      AI_HEDGE_FUND_TELEGRAM_CHAT_ID: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_CHAT_ID }}
+      MOOMOO_PAPER_TRADING_ENABLED: "true"
+      MOOMOO_LIVE_TRADING_ENABLED: "false"
+      PYTHONUTF8: "1"
+      PYTHON_ENV: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate runner Python 3.12
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\scripts\resolve_python312.ps1"
+
+      - name: Verify Python 3.12 and secrets
+        shell: powershell
+        run: |
+          $python = $env:PYTHON_312_PATH
+          if (-not $python) { throw "PYTHON_312_PATH was not set." }
+          & $python --version
+          if (-not $env:DATABASE_URL) { throw "NEON_DATABASE_URL is not configured." }
+          if (-not $env:AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN) { throw "AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN is not configured." }
+          if (-not $env:AI_HEDGE_FUND_TELEGRAM_CHAT_ID) { throw "AI_HEDGE_FUND_TELEGRAM_CHAT_ID is not configured." }
+
+      - name: Install project
+        shell: powershell
+        run: |
+          $python = $env:PYTHON_312_PATH
+          & $python -m pip install --disable-pip-version-check -e .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Send paper extended-hours stop reminder
+        shell: powershell
+        run: |
+          & $env:PYTHON_312_PATH scripts\send_paper_extended_hours_stop_reminder.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
