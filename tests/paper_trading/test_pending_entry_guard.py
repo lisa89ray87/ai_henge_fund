@@ -26,7 +26,12 @@ class FakeStateStore:
 
     def upsert(self, **kwargs):
         self.upserts.append(kwargs)
-        self.state = FakeState(**kwargs, updated_at=None)
+        self.state = FakeState(
+            symbol=kwargs["symbol"], side=kwargs["side"], quantity=kwargs["quantity"],
+            entry_price=kwargs["entry_price"], stop_price=kwargs["stop_price"],
+            target_price=kwargs["target_price"], broker_order_id=kwargs["broker_order_id"],
+            status=kwargs["status"],
+        )
 
     def mark_closed(self, symbol):
         self.closed.append(symbol)
