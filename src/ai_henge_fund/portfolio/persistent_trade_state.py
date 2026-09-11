@@ -102,14 +102,10 @@ class PersistentTradeStateStore:
                     (:symbol, :side, :quantity, :entry_price, :stop_price, :target_price,
                      :broker_order_id, :status, :updated_at)
                 ON CONFLICT (symbol) DO UPDATE SET
-                    side = EXCLUDED.side,
-                    quantity = EXCLUDED.quantity,
-                    entry_price = EXCLUDED.entry_price,
-                    stop_price = EXCLUDED.stop_price,
-                    target_price = EXCLUDED.target_price,
-                    broker_order_id = EXCLUDED.broker_order_id,
-                    status = EXCLUDED.status,
-                    updated_at = EXCLUDED.updated_at
+                    side = EXCLUDED.side, quantity = EXCLUDED.quantity,
+                    entry_price = EXCLUDED.entry_price, stop_price = EXCLUDED.stop_price,
+                    target_price = EXCLUDED.target_price, broker_order_id = EXCLUDED.broker_order_id,
+                    status = EXCLUDED.status, updated_at = EXCLUDED.updated_at
             """), {
                 "symbol": symbol.strip().upper(), "side": side.upper(), "quantity": quantity,
                 "entry_price": entry_price, "stop_price": stop_price, "target_price": target_price,
@@ -122,8 +118,7 @@ class PersistentTradeStateStore:
             row = session.execute(text("""
                 SELECT symbol, side, quantity, entry_price, stop_price, target_price,
                        broker_order_id, status, updated_at
-                FROM paper_trade_states
-                WHERE symbol = :symbol
+                FROM paper_trade_states WHERE symbol = :symbol
             """), {"symbol": normalized}).mappings().first()
         return self._state(row) if row is not None else None
 
@@ -132,20 +127,16 @@ class PersistentTradeStateStore:
             rows = session.execute(text("""
                 SELECT symbol, side, quantity, entry_price, stop_price, target_price,
                        broker_order_id, status, updated_at
-                FROM paper_trade_states
-                WHERE status IN ('OPEN', 'PARTIAL')
-                ORDER BY symbol
-            """)).mappings().all()
+                FROM paper_trade_states WHERE status IN ('OPEN', 'PARTIAL') ORDER BY symbol
+            """).mappings().all()
         return [self._state(row) for row in rows]
 
     def mark_closed(self, symbol: str) -> None:
-        normalized = symbol.strip().upper()
         with session_scope() as session:
             session.execute(text("""
-                UPDATE paper_trade_states
-                SET status = 'CLOSED', updated_at = :updated_at
+                UPDATE paper_trade_states SET status = 'CLOSED', updated_at = :updated_at
                 WHERE symbol = :symbol
-            """), {"symbol": normalized, "updated_at": datetime.now(timezone.utc)})
+            """), {"symbol": symbol.strip().upper(), "updated_at": datetime.now(timezone.utc)})
 
     def record_open(self, *, trade_id: str, symbol: str, side: str, quantity: float,
                     entry_price: float, stop_price: float | None, target_price: float | None,
@@ -153,11 +144,10 @@ class PersistentTradeStateStore:
         with session_scope() as session:
             session.execute(text("""
                 INSERT INTO paper_trade_journal
-                    (trade_id, symbol, side, quantity, entry_price, stop_price, target_price,
-                     broker_entry_order_id, opened_at, status)
-                VALUES
-                    (:trade_id, :symbol, :side, :quantity, :entry_price, :stop_price, :target_price,
-                     :broker_entry_order_id, :opened_at, 'OPEN')
+                (trade_id, symbol, side, quantity, entry_price, stop_price, target_price,
+                 broker_entry_order_id, opened_at, status)
+                VALUES (:trade_id, :symbol, :side, :quantity, :entry_price, :stop_price,
+                        :target_price, :broker_entry_order_id, :opened_at, 'OPEN')
                 ON CONFLICT (trade_id) DO NOTHING
             """), {
                 "trade_id": trade_id, "symbol": symbol.strip().upper(), "side": side.upper(),
@@ -173,15 +163,12 @@ class PersistentTradeStateStore:
         with session_scope() as session:
             session.execute(text("""
                 UPDATE paper_trade_journal
-                SET exit_quantity = :quantity,
-                    exit_price = :exit_price,
-                    exit_reason = :exit_reason,
-                    broker_exit_order_id = :broker_exit_order_id,
+                SET exit_quantity = :quantity, exit_price = :exit_price,
+                    exit_reason = :exit_reason, broker_exit_order_id = :broker_exit_order_id,
                     closed_at = :closed_at,
-                    realized_pnl = CASE
-                        WHEN side = 'BUY' THEN (:exit_price - entry_price) * :quantity
-                        ELSE (entry_price - :exit_price) * :quantity
-                    END,
+                    realized_pnl = CASE WHEN side = 'BUY'
+                        THEN (:exit_price - entry_price) * :quantity
+                        ELSE (entry_price - :exit_price) * :quantity END,
                     status = CASE WHEN :quantity >= quantity THEN 'CLOSED' ELSE 'PARTIAL' END
                 WHERE trade_id = :trade_id
             """), {
@@ -197,7 +184,7 @@ class PersistentTradeStateStore:
                        broker_entry_order_id, opened_at, status, exit_quantity, exit_price,
                        exit_reason, broker_exit_order_id, closed_at, realized_pnl
                 FROM paper_trade_journal WHERE trade_id = :trade_id
-            """)).mappings().first()
+            """), {"trade_id": trade_id}).mappings().first()
         return self._journal(row) if row is not None else None
 
     def journal_for_day(self, day_start: datetime, day_end: datetime) -> list[TradeJournalEntry]:
@@ -219,21 +206,19 @@ class PersistentTradeStateStore:
                 SELECT trade_id, symbol, side, quantity, entry_price, stop_price, target_price,
                        broker_entry_order_id, opened_at, status, exit_quantity, exit_price,
                        exit_reason, broker_exit_order_id, closed_at, realized_pnl
-                FROM paper_trade_journal
-                WHERE status IN ('OPEN', 'PARTIAL')
+                FROM paper_trade_journal WHERE status IN ('OPEN', 'PARTIAL')
                 ORDER BY symbol, opened_at
             """)).mappings().all()
         return [self._journal(row) for row in rows]
 
     def update_remaining_quantity(self, *, symbol: str, quantity: float, status: str = "OPEN") -> None:
-        """Update the current symbol state after a partial broker exit."""
         if quantity <= 0:
             raise ValueError("remaining quantity must be positive")
         with session_scope() as session:
             result = session.execute(text("""
                 UPDATE paper_trade_states
                 SET quantity = :quantity, status = :status, updated_at = :updated_at
-                WHERE symbol = :symbol AND status = 'OPEN'
+                WHERE symbol = :symbol AND status IN ('OPEN', 'PARTIAL')
             """), {
                 "symbol": symbol.strip().upper(), "quantity": quantity,
                 "status": status.upper(), "updated_at": datetime.now(timezone.utc),
@@ -243,25 +228,18 @@ class PersistentTradeStateStore:
 
     @staticmethod
     def _state(row) -> TradeState:
-        return TradeState(
-            symbol=row["symbol"], side=row["side"], quantity=float(row["quantity"]),
-            entry_price=float(row["entry_price"]),
-            stop_price=float(row["stop_price"]) if row["stop_price"] is not None else None,
+        return TradeState(symbol=row["symbol"], side=row["side"], quantity=float(row["quantity"]),
+            entry_price=float(row["entry_price"]), stop_price=float(row["stop_price"]) if row["stop_price"] is not None else None,
             target_price=float(row["target_price"]) if row["target_price"] is not None else None,
-            broker_order_id=row["broker_order_id"], status=row["status"], updated_at=row["updated_at"],
-        )
+            broker_order_id=row["broker_order_id"], status=row["status"], updated_at=row["updated_at"])
 
     @staticmethod
     def _journal(row) -> TradeJournalEntry:
-        return TradeJournalEntry(
-            trade_id=row["trade_id"], symbol=row["symbol"], side=row["side"], quantity=float(row["quantity"]),
-            entry_price=float(row["entry_price"]),
-            stop_price=float(row["stop_price"]) if row["stop_price"] is not None else None,
+        return TradeJournalEntry(trade_id=row["trade_id"], symbol=row["symbol"], side=row["side"], quantity=float(row["quantity"]),
+            entry_price=float(row["entry_price"]), stop_price=float(row["stop_price"]) if row["stop_price"] is not None else None,
             target_price=float(row["target_price"]) if row["target_price"] is not None else None,
-            broker_entry_order_id=row["broker_entry_order_id"], opened_at=row["opened_at"],
-            status=row["status"],
+            broker_entry_order_id=row["broker_entry_order_id"], opened_at=row["opened_at"], status=row["status"],
             exit_quantity=float(row["exit_quantity"]) if row["exit_quantity"] is not None else None,
             exit_price=float(row["exit_price"]) if row["exit_price"] is not None else None,
-            exit_reason=row["exit_reason"], broker_exit_order_id=row["broker_exit_order_id"],
-            closed_at=row["closed_at"], realized_pnl=float(row["realized_pnl"]) if row["realized_pnl"] is not None else None,
-        )
+            exit_reason=row["exit_reason"], broker_exit_order_id=row["broker_exit_order_id"], closed_at=row["closed_at"],
+            realized_pnl=float(row["realized_pnl"]) if row["realized_pnl"] is not None else None)
