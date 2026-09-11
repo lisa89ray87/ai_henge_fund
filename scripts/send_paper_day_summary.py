@@ -49,7 +49,6 @@ def format_trade_block(symbol: str, *, side: str, quantity: float, entry_price: 
                        stop_price: float | None, target_price: float | None,
                        exit_quantity: float | None, exit_price: float | None,
                        pnl: float | None, reason: str | None) -> str:
-    """Render one lifecycle in the compact Telegram layout."""
     lines = [symbol, f"  Entry {_qty(quantity)} @ {_money(entry_price)}"]
     if reason == "TARGET" and target_price is not None:
         lines.append(f"  Target {_money(target_price)}")
@@ -96,7 +95,6 @@ def _journal_block(entry: TradeJournalEntry, exits) -> tuple[str, float, int]:
 
 
 def _legacy_blocks(execution, state_store, filled) -> tuple[list[str], float, int]:
-    """Fallback for trades made before the trade-instance journal was introduced."""
     blocks: list[str] = []
     pnl_total = 0.0
     pnl_count = 0
@@ -105,11 +103,7 @@ def _legacy_blocks(execution, state_store, filled) -> tuple[list[str], float, in
         if state is None:
             continue
         symbol_fills = [row for row in filled if row["symbol"] == symbol]
-        entry_rows = [
-            row for row in symbol_fills
-            if row["side"] == state.side
-            and abs(row["filled_price"] - state.entry_price) <= max(0.01, state.entry_price * 0.002)
-        ]
+        entry_rows = [row for row in symbol_fills if row["side"] == state.side and abs(row["filled_price"] - state.entry_price) <= max(0.01, state.entry_price * 0.002)]
         exit_side = "SELL" if state.side == "BUY" else "BUY"
         exit_rows = [row for row in symbol_fills if row["side"] == exit_side]
         entry_row = entry_rows[-1] if entry_rows else None
@@ -123,18 +117,16 @@ def _legacy_blocks(execution, state_store, filled) -> tuple[list[str], float, in
             pnl = _realized_pnl(state.side, entry_price, row["filled_price"], row["filled_quantity"])
             pnl_total += pnl
             pnl_count += 1
-            blocks.append(format_trade_block(
-                symbol, side=state.side, quantity=entry_qty, entry_price=entry_price,
-                stop_price=state.stop_price, target_price=state.target_price,
-                exit_quantity=row["filled_quantity"], exit_price=row["filled_price"], pnl=pnl, reason=reason,
-            ))
+            blocks.append(format_trade_block(symbol, side=state.side, quantity=entry_qty, entry_price=entry_price, stop_price=state.stop_price, target_price=state.target_price, exit_quantity=row["filled_quantity"], exit_price=row["filled_price"], pnl=pnl, reason=reason))
         else:
-            blocks.append(format_trade_block(
-                symbol, side=state.side, quantity=entry_qty, entry_price=entry_price,
-                stop_price=state.stop_price, target_price=state.target_price,
-                exit_quantity=None, exit_price=None, pnl=None, reason=None,
-            ))
+            blocks.append(format_trade_block(symbol, side=state.side, quantity=entry_qty, entry_price=entry_price, stop_price=state.stop_price, target_price=state.target_price, exit_quantity=None, exit_price=None, pnl=None, reason=None))
     return blocks, pnl_total, pnl_count
+
+
+def _broker_signed_quantity(row: dict) -> float:
+    """Normalize broker quantity to a signed position quantity."""
+    value = float(row.get("quantity", 0.0) or 0.0)
+    return value
 
 
 def build_summary() -> str:
@@ -145,10 +137,7 @@ def build_summary() -> str:
         today = datetime.now(ET).date()
         day_start = datetime.combine(today, time.min, tzinfo=ET)
         day_end = day_start + timedelta(days=1)
-        orders = [
-            row for row in execution.list_order_history()
-            if _day_key(row["create_time"]) == today.isoformat() or _day_key(row["updated_time"]) == today.isoformat()
-        ]
+        orders = [row for row in execution.list_order_history() if _day_key(row["create_time"]) == today.isoformat() or _day_key(row["updated_time"]) == today.isoformat()]
         filled = [row for row in orders if row["status"] in FILLED and row["filled_quantity"] > 0]
 
         journal = state_store.journal_for_day(day_start, day_end)
@@ -174,27 +163,27 @@ def build_summary() -> str:
         handoffs: list[str] = []
         for row in current_positions:
             state = state_store.get(row["symbol"])
+            broker_qty = _broker_signed_quantity(row)
             if state is None:
-                handoffs.append(f"{row['symbol']}\n  Target/Stop history unavailable\n  Manual review required")
+                handoffs.append(f"{row['symbol']}\n  Broker position {_qty(broker_qty)} @ {_money(row['average_price'])}\n  Target/Stop history unavailable\n  Manual review required")
                 continue
-            side = "LONG" if state.side == "BUY" else "SHORT"
-            handoffs.append(
-                f"{row['symbol']}\n"
-                f"  {side} {_qty(row['quantity'])}\n"
-                f"  Entry {_qty(row['quantity'])} @ {_money(row['average_price'])}\n"
-                + (f"  Target {_money(state.target_price)}\n" if state.target_price is not None else "")
-                + (f"  Stop {_money(state.stop_price)}" if state.stop_price is not None else "  Stop N/A")
-            )
 
-        message = [
-            "📊 AI Henge Fund — PAPER DAY SUMMARY",
-            today.strftime("%m/%d"),
-            "Environment: Moomoo US SIMULATE / PAPER",
-            "Live trading: DISABLED",
-            "",
-            "📈 TRADES",
-            "",
-        ]
+            # The broker's signed quantity is authoritative for LONG/SHORT and size.
+            broker_side = "LONG" if broker_qty > 0 else "SHORT" if broker_qty < 0 else "UNKNOWN"
+            saved_side = "LONG" if state.side == "BUY" else "SHORT"
+            mismatch = broker_qty != 0 and ((broker_qty > 0) != (state.side == "BUY"))
+            lines = [row["symbol"], f"  {broker_side} {_qty(abs(broker_qty))}", f"  Entry {_qty(abs(broker_qty))} @ {_money(row['average_price'])}"]
+            if state.target_price is not None:
+                lines.append(f"  Target {_money(state.target_price)}")
+            if state.stop_price is not None:
+                lines.append(f"  Stop {_money(state.stop_price)}")
+            else:
+                lines.append("  Stop N/A")
+            if mismatch:
+                lines.append(f"  ⚠️ STATE MISMATCH: saved {saved_side}, broker {broker_side}")
+            handoffs.append("\n".join(lines))
+
+        message = ["📊 AI Henge Fund — PAPER DAY SUMMARY", today.strftime("%m/%d"), "Environment: Moomoo US SIMULATE / PAPER", "Live trading: DISABLED", "", "📈 TRADES", ""]
         if blocks:
             for index, block in enumerate(blocks):
                 if index:
@@ -202,14 +191,7 @@ def build_summary() -> str:
                 message.append(block)
         else:
             message.append("  None")
-
-        message.extend([
-            "",
-            f"💰 Realized P/L: {'+' if pnl_total >= 0 else ''}{_money(pnl_total)}"
-            + (f" across {pnl_count} exit(s)" if pnl_count else ""),
-            "",
-            f"🌙 OVERNIGHT HANDOFF ({len(handoffs)})",
-        ])
+        message.extend(["", f"💰 Realized P/L: {'+' if pnl_total >= 0 else ''}{_money(pnl_total)}" + (f" across {pnl_count} exit(s)" if pnl_count else ""), "", f"🌙 OVERNIGHT HANDOFF ({len(handoffs)})"])
         if handoffs:
             for index, block in enumerate(handoffs):
                 if index:
@@ -217,11 +199,7 @@ def build_summary() -> str:
                 message.append(block)
         else:
             message.append("  None — no open paper positions")
-
-        message.extend([
-            "",
-            "AI Henge Fund stops agent-side monitoring after the regular session; handed-off positions require manual extended-hours monitoring.",
-        ])
+        message.extend(["", "AI Henge Fund stops agent-side monitoring after the regular session; handed-off positions require manual extended-hours monitoring."])
         return "\n".join(message)
     finally:
         execution.close()
