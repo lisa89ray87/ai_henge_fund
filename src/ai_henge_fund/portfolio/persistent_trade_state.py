@@ -128,7 +128,7 @@ class PersistentTradeStateStore:
                 SELECT symbol, side, quantity, entry_price, stop_price, target_price,
                        broker_order_id, status, updated_at
                 FROM paper_trade_states WHERE status IN ('OPEN', 'PARTIAL') ORDER BY symbol
-            """).mappings().all()
+            """)).mappings().all()
         return [self._state(row) for row in rows]
 
     def mark_closed(self, symbol: str) -> None:
