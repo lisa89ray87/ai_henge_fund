@@ -15,9 +15,9 @@ def test_pre_market_reminder_window() -> None:
     assert _current_window(now) == "PRE-MARKET"
 
 
-def test_post_market_reminder_window() -> None:
+def test_post_market_prep_window() -> None:
     now = datetime(2026, 9, 4, 15, 55, tzinfo=ET)
-    assert _current_window(now) == "POST-MARKET"
+    assert _current_window(now) == "POST-MARKET PREP"
 
 
 def test_non_trigger_time_is_noop() -> None:
@@ -25,7 +25,7 @@ def test_non_trigger_time_is_noop() -> None:
     assert _current_window(now) is None
 
 
-def test_message_is_paper_only_and_contains_manual_stop_action() -> None:
+def test_message_is_paper_only_and_explicit_about_overnight_limit() -> None:
     state = SimpleNamespace(
         symbol="US.AAPL",
         side="BUY",
@@ -34,8 +34,9 @@ def test_message_is_paper_only_and_contains_manual_stop_action() -> None:
         stop_price=195.0,
         target_price=210.0,
     )
-    message = _build_message("POST-MARKET", [state])
-    assert "PAPER EXTENDED-HOURS STOP ACTION" in message
+    message = _build_message("POST-MARKET PREP", [state])
+    assert "PAPER EXTENDED-HOURS PROTECTION" in message
     assert "US.AAPL LONG" in message
-    assert "Manual stop side: SELL" in message
+    assert "Manual protection side: SELL" in message
+    assert "does not support US-stock pre-market, after-hours, or overnight order execution" in message
     assert "live trading is unaffected" in message
