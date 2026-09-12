@@ -1,0 +1,63 @@
+name: Export Paper Trade Journal
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      PYTHONUTF8: "1"
+      PYTHON_ENV: production
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Locate runner Python 3.12
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\scripts\resolve_python312.ps1"
+
+      - name: Validate database configuration
+        shell: powershell
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) {
+            throw "NEON_DATABASE_URL is not configured."
+          }
+
+      - name: Install project
+        shell: powershell
+        run: |
+          $python = $env:PYTHON_312_PATH
+          if (-not $python) {
+            throw "PYTHON_312_PATH was not set."
+          }
+          & $python -m pip install --disable-pip-version-check -e .
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Export paper trade journal
+        shell: powershell
+        run: |
+          & $env:PYTHON_312_PATH scripts\export_paper_trade_journal.py
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+          if (-not (Test-Path "exports\completed_paper_trades.csv")) {
+            throw "CSV export was not created."
+          }
+
+      - name: Upload paper trade journal
+        uses: actions/upload-artifact@v4
+        with:
+          name: completed-paper-trades
+          path: exports/completed_paper_trades.csv
+          if-no-files-found: error
+          retention-days: 7
