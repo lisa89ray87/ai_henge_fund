@@ -1,4 +1,10 @@
-"""Send paper-only extended-hours stop reminders for open Moomoo SIMULATE positions."""
+"""Send paper-only extended-hours stop reminders for open Moomoo SIMULATE positions.
+
+Moomoo's current US paper-trading API does not support US-stock pre-market,
+after-hours, or overnight order execution for the paper account used by this
+project. This script therefore provides an explicit manual-protection reminder;
+it does not claim that a broker-side overnight stop exists.
+"""
 
 from __future__ import annotations
 
@@ -11,7 +17,7 @@ from ai_henge_fund.config.telegram import telegram_config_from_env
 from ai_henge_fund.portfolio.persistent_trade_state import PersistentTradeStateStore
 
 NEW_YORK = ZoneInfo("America/New_York")
-REMINDER_HOUR = {3: "PRE-MARKET", 15: "POST-MARKET"}
+REMINDER_HOUR = {3: "PRE-MARKET", 15: "POST-MARKET PREP"}
 
 
 def _truthy(name: str, default: str = "false") -> bool:
@@ -26,10 +32,10 @@ def _current_window(now: datetime) -> str | None:
 
 def _build_message(window: str, states) -> str:
     lines = [
-        f"⚠️ PAPER EXTENDED-HOURS STOP ACTION — {window}",
-        "Moomoo US SIMULATE does not support STOP or STOP_LIMIT orders.",
-        "AI Henge Fund will not place a broker-side stop for these paper positions.",
-        "Please manually perform the desired stop/protection action in Moomoo before the extended-hours window.",
+        f"⚠️ PAPER EXTENDED-HOURS PROTECTION — {window}",
+        "Moomoo US SIMULATE does not support US-stock pre-market, after-hours, or overnight order execution.",
+        "AI Henge Fund cannot place a broker-side overnight stop in this paper account.",
+        "Use this alert to review the open paper position and decide the desired manual protection for the next supported session.",
         "",
     ]
     for state in states:
@@ -40,7 +46,7 @@ def _build_message(window: str, states) -> str:
         lines.extend([
             f"{state.symbol} {side} | Qty: {state.quantity:g}",
             f"Entry: ${state.entry_price:,.4f} | Stop: {stop} | Target: {target}",
-            f"Manual stop side: {action}",
+            f"Manual protection side: {action}",
             "",
         ])
     lines.append("Paper trading only — live trading is unaffected.")
