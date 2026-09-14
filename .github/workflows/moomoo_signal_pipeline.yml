@@ -140,6 +140,7 @@ jobs:
 
       - name: Send paper day summary to dedicated Telegram
         if: always()
+        timeout-minutes: 5
         shell: powershell
         run: |
           if ($env:PYTHON_312_PATH) {
