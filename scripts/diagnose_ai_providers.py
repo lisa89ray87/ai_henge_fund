@@ -4,9 +4,9 @@ This script never places trades. It checks provider SDKs, configured model names
 and performs a minimal text-generation probe so provider failures are visible
 before the long TradingAgents pipeline begins.
 
-For paper trading, Gemini is the required provider while OpenAI credits are
-currently exhausted. OpenAI failures are therefore reported as warnings rather
-than blocking the paper pipeline. Gemini failures remain fatal.
+For paper trading, Gemini is the preferred provider. Provider availability can
+be transient, so a temporary Gemini outage is reported as a warning rather than
+blocking the paper pipeline. Missing credentials remain fatal.
 """
 
 from __future__ import annotations
@@ -83,14 +83,31 @@ def main() -> int:
         )
         print(f"GEMINI PROBE: PASS response={str(response.content)[:120]!r}")
     except Exception as exc:
-        print(
-            "GEMINI PROBE: FAIL "
-            f"type={type(exc).__name__} message={str(exc)[:1000]!r}"
+        message = str(exc)
+        lowered = message.lower()
+        transient_markers = (
+            "429",
+            "rate limit",
+            "rate_limit",
+            "resource_exhausted",
+            "503",
+            "service unavailable",
+            "temporarily unavailable",
+            "high demand",
+            "overloaded",
         )
+        is_transient = any(marker in lowered for marker in transient_markers)
+        print(
+            "GEMINI PROBE: WARN " if is_transient else "GEMINI PROBE: FAIL "
+            + f"type={type(exc).__name__} message={message[:1000]!r}"
+        )
+        if is_transient:
+            print("AI PROVIDER DIAGNOSTICS: WARN (Gemini temporarily unavailable; runtime fallback remains enabled)")
+            return 0
         print("AI PROVIDER DIAGNOSTICS: FAIL (Gemini probe failed)")
         return 1
 
-    print("AI PROVIDER DIAGNOSTICS: PASS (Gemini required; OpenAI optional)")
+    print("AI PROVIDER DIAGNOSTICS: PASS (Gemini preferred; OpenAI optional)")
     return 0
 
 
