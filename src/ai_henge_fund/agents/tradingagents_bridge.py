@@ -307,7 +307,8 @@ MOOMOO SNAPSHOT:
             "429", "rate limit", "rate_limit", "quota", "resource_exhausted", "insufficient_quota",
             "billing", "credit balance", "authentication", "unauthorized", "invalid api key",
             "api key is invalid", "not_found", "model is not found", "no longer available",
-            "not supported for generatecontent",
+            "not supported for generatecontent", "503", "service unavailable",
+            "temporarily unavailable", "high demand", "overloaded",
         )
         return any(marker in message for marker in markers)
 
@@ -348,7 +349,16 @@ MOOMOO SNAPSHOT:
         symbol = self._normalize_symbol(str(request["symbol"]))
         self._clear_cancelled(symbol)
         if os.getenv("TRADINGAGENTS_LIGHTWEIGHT_PAPER_AI", "false").strip().lower() in {"1", "true", "yes", "y"}:
-            return self._run_lightweight_gemini(request)
+            try:
+                return self._run_lightweight_gemini(request)
+            except Exception as exc:
+                if not self._is_provider_failure(exc):
+                    raise
+                print(
+                    f"AI lightweight provider failed: provider=google_genai; "
+                    f"symbol={symbol}; reason={exc}; fallback=deterministic"
+                )
+                return self._deterministic_fallback(request, str(exc))
         if self._primary_provider is None:
             return self._deterministic_fallback(request, "No configured AI provider")
         try:
