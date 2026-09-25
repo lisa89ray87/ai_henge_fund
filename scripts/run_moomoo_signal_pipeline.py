@@ -194,7 +194,6 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
     print(f"AI analysis      : {len(candidates)} candidate(s)")
 
     analyzed = 0
-    provider_stats: dict[str, int] = {}
     decision_stats = {"BUY": 0, "SELL": 0, "WAIT": 0, "RISK_REJECTED": 0, "TIMEOUT": 0, "ERROR": 0}
     for candidate_index, (snapshot, _signal) in enumerate(candidates, start=1):
         analyzed += 1
@@ -218,10 +217,6 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             print(f"AI/PIPELINE {snapshot.symbol}: SKIP ({exc})")
             continue
 
-        provider = getattr(result, "ai_decision", None)
-        provider_name = getattr(getattr(pipeline, "ai_adapter", None), "runner", None)
-        # The normalized provider is available in the AI decision only through
-        # the adapter result; risk output remains the source of truth for execution.
         if result.ai_decision in {"BUY", "SELL", "WAIT"}:
             decision_stats[result.ai_decision] += 1
         if result.risk.action not in {"BUY", "SELL"}:
