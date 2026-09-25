@@ -19,7 +19,7 @@ jobs:
     runs-on: [self-hosted, Windows, X64]
     timeout-minutes: 15
     env:
-      DATABASE_URL: \${{ secrets.NEON_DATABASE_URL }}
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       PYTHONUTF8: "1"
       PYTHON_ENV: production
       MOOMOO_PAPER_TRADING_ENABLED: "true"
@@ -31,13 +31,15 @@ jobs:
         shell: powershell
         run: |
           & "$env:GITHUB_WORKSPACE\scripts\resolve_python312.ps1"
-          if (-not $env:PYTHON_312_PATH) { throw "PYTHON_312_PATH was not set." }
       - name: Validate read-only configuration
         shell: powershell
         run: |
           if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) { throw "NEON_DATABASE_URL is not configured." }
+          if ([string]::IsNullOrWhiteSpace($env:PYTHON_312_PATH)) { throw "PYTHON_312_PATH was not persisted by the Python resolver." }
           if ($env:MOOMOO_LIVE_TRADING_ENABLED -ne "false") { throw "Live Moomoo trading must remain disabled." }
           if ($env:MOOMOO_PAPER_TRADING_ENABLED -ne "true") { throw "Moomoo SIMULATE access must be enabled for read-only broker queries." }
+          & $env:PYTHON_312_PATH --version
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Install project dependencies
         shell: powershell
         run: |
@@ -46,12 +48,12 @@ jobs:
       - name: Run read-only reconciliation
         shell: powershell
         run: |
-          & $env:PYTHON_312_PATH scripts\reconcile_paper_trade_readonly.py --date "\${{ inputs.trade_date }}" --symbol "\${{ inputs.symbol }}"
+          & $env:PYTHON_312_PATH scripts\reconcile_paper_trade_readonly.py --date "${{ inputs.trade_date }}" --symbol "${{ inputs.symbol }}"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Upload reconciliation result
         uses: actions/upload-artifact@v4
         with:
-          name: paper-trade-reconciliation-\${{ inputs.trade_date }}-\${{ inputs.symbol }}
+          name: paper-trade-reconciliation-${{ inputs.trade_date }}-${{ inputs.symbol }}
           path: reconciliation/*.json
           if-no-files-found: error
           retention-days: 7
