@@ -21,6 +21,9 @@ class PipelineResult:
     ai_decision: str
     risk: RiskDecision
     lifecycle: MoomooLifecycleResult | None
+    ai_provider: str | None = None
+    ai_confidence: float | None = None
+    quantity_source: str | None = None
 
 
 class TradingPipeline:
@@ -137,7 +140,12 @@ class TradingPipeline:
                 deployed_capital=self._deployed_capital(),
                 open_position_count=len(self.positions.all()),
             )
-        return PipelineResult(signal.direction, ai.decision, risk, None)
+        return PipelineResult(
+            signal.direction, ai.decision, risk, None,
+            ai_provider=ai.provider,
+            ai_confidence=ai.confidence,
+            quantity_source=ai.quantity_source,
+        )
 
     def execute_paper_result(self, snapshot: SignalSnapshot, result: PipelineResult) -> PipelineResult:
         lifecycle = None
@@ -159,7 +167,12 @@ class TradingPipeline:
                         symbol=snapshot.symbol,
                         price=float(snapshot.last_price),
                     )
-        return PipelineResult(result.deterministic_direction, result.ai_decision, result.risk, lifecycle)
+        return PipelineResult(
+            result.deterministic_direction, result.ai_decision, result.risk, lifecycle,
+            ai_provider=result.ai_provider,
+            ai_confidence=result.ai_confidence,
+            quantity_source=result.quantity_source,
+        )
 
     def evaluate(self, snapshot: SignalSnapshot, *, execute_paper: bool = True) -> PipelineResult:
         result = self.analyze(snapshot)
