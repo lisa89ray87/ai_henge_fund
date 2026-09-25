@@ -194,6 +194,8 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
     print(f"AI analysis      : {len(candidates)} candidate(s)")
 
     analyzed = 0
+    provider_stats: dict[str, int] = {}
+    decision_stats = {"BUY": 0, "SELL": 0, "WAIT": 0, "RISK_REJECTED": 0, "TIMEOUT": 0, "ERROR": 0}
     for candidate_index, (snapshot, _signal) in enumerate(candidates, start=1):
         analyzed += 1
         print(f"AI HEARTBEAT: {candidate_index}/{len(candidates)} starting {snapshot.symbol}")
@@ -203,6 +205,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                 _cancel_timed_out_analysis(pipeline, snapshot)
                 print(f"AI/PIPELINE {snapshot.symbol}: TIMEOUT ({timeout_reason})")
                 _send_timeout_notification(pipeline, snapshot, timeout_reason)
+                decision_stats["TIMEOUT"] += 1
                 print("AI HEARTBEAT: candidate timed out; continuing with remaining candidates")
                 continue
             if result is None:
@@ -211,8 +214,18 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             if execute_paper and result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
                 result = pipeline.execute_paper_result(snapshot, result)
         except Exception as exc:
+            decision_stats["ERROR"] += 1
             print(f"AI/PIPELINE {snapshot.symbol}: SKIP ({exc})")
             continue
+
+        provider = getattr(result, "ai_decision", None)
+        provider_name = getattr(getattr(pipeline, "ai_adapter", None), "runner", None)
+        # The normalized provider is available in the AI decision only through
+        # the adapter result; risk output remains the source of truth for execution.
+        if result.ai_decision in {"BUY", "SELL", "WAIT"}:
+            decision_stats[result.ai_decision] += 1
+        if result.risk.action not in {"BUY", "SELL"}:
+            decision_stats["RISK_REJECTED"] += 1
 
         print(f"RESULT {snapshot.symbol}: deterministic={result.deterministic_direction} ai={result.ai_decision} risk={result.risk.action} qty={result.risk.quantity:g}")
         print(f"  reason: {result.risk.reason}")
@@ -247,7 +260,7 @@ def main() -> int:
     interval = os.getenv("MOOMOO_SIGNAL_INTERVAL", "5m").strip()
     execute_paper = _truthy("EXECUTE_PAPER")
     universe = get_stock_universe()
-    max_ai_candidates = _int_env("MOOMOO_SIGNAL_MAX_AI_CANDIDATES", 5)
+    max_ai_candidates = _int_env("MOOMOO_SIGNAL_MAX_AI_CANDIDATES", 4)
     max_paper_trades = _int_env("MOOMOO_SIGNAL_MAX_PAPER_TRADES", 1)
     session_loop = _truthy("SESSION_RUN_UNTIL_CLOSE", "true")
     cycle_minutes = _int_env("MOOMOO_SIGNAL_CYCLE_MINUTES", 20)
