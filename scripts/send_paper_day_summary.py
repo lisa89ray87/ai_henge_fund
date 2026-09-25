@@ -191,7 +191,23 @@ def build_summary() -> str:
                 message.append(block)
         else:
             message.append("  None")
-        message.extend(["", f"💰 Realized P/L: {'+' if pnl_total >= 0 else ''}{_money(pnl_total)}" + (f" across {pnl_count} exit(s)" if pnl_count else ""), "", f"🌙 OVERNIGHT HANDOFF ({len(handoffs)})"])
+        closed_pnls: list[float] = []
+        for entry in journal:
+            exits = trade_journal.exits_for_trade(entry.trade_id)
+            closed_pnls.extend(float(event.realized_pnl) for event in exits)
+            if not exits and entry.exit_price is not None and entry.realized_pnl is not None:
+                closed_pnls.append(float(entry.realized_pnl))
+        wins = sum(1 for pnl in closed_pnls if pnl > 0)
+        losses = sum(1 for pnl in closed_pnls if pnl < 0)
+        win_rate = (wins / len(closed_pnls) * 100) if closed_pnls else None
+        avg_pnl = (sum(closed_pnls) / len(closed_pnls)) if closed_pnls else None
+        metrics = [
+            f"💰 Realized P/L: {'+' if pnl_total >= 0 else ''}{_money(pnl_total)}" + (f" across {pnl_count} exit(s)" if pnl_count else ""),
+            f"📊 Closed trades: {len(closed_pnls)} | Wins: {wins} | Losses: {losses}",
+            f"📈 Win rate: {win_rate:.1f}%" if win_rate is not None else "📈 Win rate: N/A",
+            f"💵 Avg realized P/L: {'+' if avg_pnl >= 0 else ''}{_money(avg_pnl)}" if avg_pnl is not None else "💵 Avg realized P/L: N/A",
+        ]
+        message.extend(["", *metrics, "", f"🌙 OVERNIGHT HANDOFF ({len(handoffs)})"])
         if handoffs:
             for index, block in enumerate(handoffs):
                 if index:
