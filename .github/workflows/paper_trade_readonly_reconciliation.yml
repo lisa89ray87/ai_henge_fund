@@ -1,0 +1,57 @@
+name: Read-Only Paper Trade Reconciliation
+on:
+  workflow_dispatch:
+    inputs:
+      trade_date:
+        description: "US/Eastern trade date to reconcile"
+        required: true
+        default: "2026-09-25"
+        type: string
+      symbol:
+        description: "Paper symbol to reconcile"
+        required: true
+        default: "US.PLTR"
+        type: string
+permissions:
+  contents: read
+jobs:
+  reconcile:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 15
+    env:
+      DATABASE_URL: \${{ secrets.NEON_DATABASE_URL }}
+      PYTHONUTF8: "1"
+      PYTHON_ENV: production
+      MOOMOO_PAPER_TRADING_ENABLED: "true"
+      MOOMOO_LIVE_TRADING_ENABLED: "false"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      - name: Locate runner Python 3.12
+        shell: powershell
+        run: |
+          & "$env:GITHUB_WORKSPACE\scripts\resolve_python312.ps1"
+          if (-not $env:PYTHON_312_PATH) { throw "PYTHON_312_PATH was not set." }
+      - name: Validate read-only configuration
+        shell: powershell
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) { throw "NEON_DATABASE_URL is not configured." }
+          if ($env:MOOMOO_LIVE_TRADING_ENABLED -ne "false") { throw "Live Moomoo trading must remain disabled." }
+          if ($env:MOOMOO_PAPER_TRADING_ENABLED -ne "true") { throw "Moomoo SIMULATE access must be enabled for read-only broker queries." }
+      - name: Install project dependencies
+        shell: powershell
+        run: |
+          & $env:PYTHON_312_PATH -m pip install --disable-pip-version-check -e .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Run read-only reconciliation
+        shell: powershell
+        run: |
+          & $env:PYTHON_312_PATH scripts\reconcile_paper_trade_readonly.py --date "\${{ inputs.trade_date }}" --symbol "\${{ inputs.symbol }}"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Upload reconciliation result
+        uses: actions/upload-artifact@v4
+        with:
+          name: paper-trade-reconciliation-\${{ inputs.trade_date }}-\${{ inputs.symbol }}
+          path: reconciliation/*.json
+          if-no-files-found: error
+          retention-days: 7
