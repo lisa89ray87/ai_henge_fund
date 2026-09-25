@@ -10,7 +10,7 @@ def make_snapshot():
         last_price=103,
         volume=1000,
         market_state="REGULAR",
-        candles=tuple({"close": x} for x in [100, 101, 103]),
+        candles=tuple({"close": x} for x in [95, 96, 97, 98, 99, 100, 100.5, 101, 101.5, 102, 102.2, 102.4, 102.6, 102.8, 103]),
         data_source="test",
         data_quality="LIVE",
     )
