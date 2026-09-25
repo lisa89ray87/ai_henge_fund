@@ -113,7 +113,7 @@ class DeterministicSignalEngine:
             value = self._safe_float(candle.get("volume"))
             if value is not None and value > 0:
                 volumes.append(value)
-        current_volume = self._safe_float(snapshot.volume)
+        current_volume = volumes[-1] if volumes else self._safe_float(snapshot.volume)
         avg_volume = self._mean(volumes[:-1]) if len(volumes) > 1 else None
         volume_ratio = (current_volume / avg_volume) if current_volume and avg_volume else None
 
