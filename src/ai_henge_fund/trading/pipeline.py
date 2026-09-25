@@ -84,17 +84,35 @@ class TradingPipeline:
         return float(int(quantity)), f"{source} position size={int(quantity)}"
 
     def _paper_test_decision(self, snapshot: SignalSnapshot, signal, ai: AITradeDecision) -> RiskDecision:
-        """Build an execution decision without applying the live-capital risk gate."""
+        """Apply strategy-quality gates in paper mode while bypassing live capital budgets."""
+        checks: list[str] = ["PAPER_CAPITAL_LIMITS_BYPASSED"]
+
+        if not snapshot.is_usable:
+            return RiskDecision("WAIT", 0, None, "Market snapshot is not usable", tuple(checks))
+        if snapshot.data_quality not in {"LIVE", "VERIFIED"}:
+            return RiskDecision("WAIT", 0, None, "Market data quality is insufficient", tuple(checks))
+        checks.append("DATA_QUALITY")
+
+        if snapshot.market_state not in self.risk_gate.allowed_market_states:
+            return RiskDecision("WAIT", 0, None, f"Market state {snapshot.market_state!r} is not tradable", tuple(checks))
+        checks.append("MARKET_STATE")
+
+        if signal.setup_state != "CANDIDATE":
+            return RiskDecision("WAIT", 0, None, "Deterministic setup is not a trade candidate", tuple(checks))
+
         expected = "BUY" if signal.direction == "LONG" else "SELL" if signal.direction == "SHORT" else "WAIT"
         if ai.decision != expected or expected == "WAIT":
-            return RiskDecision(
-                "WAIT", 0, None, "AI decision does not confirm a tradable deterministic direction", ("PAPER_RISK_BYPASS",),
-            )
+            return RiskDecision("WAIT", 0, None, "AI decision does not confirm a tradable deterministic direction", tuple(checks))
+        checks.append("AI_DIRECTION")
+
+        if ai.confidence < self.risk_gate.min_ai_confidence:
+            return RiskDecision("WAIT", 0, None, "AI confidence below risk threshold", tuple(checks))
+        checks.append("AI_CONFIDENCE")
 
         try:
             fallback_entry, fallback_stop, fallback_target = self.risk_gate._trade_levels(snapshot, expected)
         except ValueError as exc:
-            return RiskDecision("WAIT", 0, None, str(exc), ("PAPER_RISK_BYPASS",))
+            return RiskDecision("WAIT", 0, None, str(exc), tuple(checks))
 
         entry = ai.entry_price if ai.entry_price is not None else fallback_entry
         stop = ai.stop_price if ai.stop_price is not None else fallback_stop
@@ -105,24 +123,36 @@ class TradingPipeline:
         else:
             valid_levels = target < entry < stop
         if not valid_levels:
-            return RiskDecision("WAIT", 0, None, "AI trade levels are invalid for the selected direction", ("PAPER_RISK_BYPASS",))
+            return RiskDecision("WAIT", 0, None, "AI trade levels are invalid for the selected direction", tuple(checks))
+
+        risk_per_share = abs(entry - stop)
+        reward_per_share = abs(target - entry)
+        reward_risk = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
+        if reward_risk < self.risk_gate.reward_risk_multiple:
+            return RiskDecision(
+                "WAIT", 0, risk_per_share,
+                f"Reward/risk {reward_risk:.2f} is below minimum {self.risk_gate.reward_risk_multiple:.2f}",
+                tuple(checks), entry_price=entry, stop_price=stop, target_price=target,
+            )
+        checks.extend(["AI_TRADE_LEVELS", "REWARD_RISK"])
 
         validated = self._validated_paper_quantity(ai, entry)
         if validated is None:
             reason = "AI did not provide a valid paper position size"
             return RiskDecision(
-                "WAIT", 0, None, reason,
-                ("PAPER_RISK_BYPASS", "AI_POSITION_SIZE_REQUIRED"),
+                "WAIT", 0, risk_per_share, reason,
+                tuple(checks + ["AI_POSITION_SIZE_REQUIRED"]),
                 entry_price=entry, stop_price=stop, target_price=target,
             )
         quantity, size_check = validated
+        checks.append("AI_POSITION_SIZE")
 
         return RiskDecision(
             expected,
             quantity,
-            abs(entry - stop),
-            f"Paper-only mode: live capital gate bypassed; {size_check}",
-            ("PAPER_RISK_BYPASS", "AI_POSITION_SIZE", "AI_TRADE_LEVELS"),
+            risk_per_share,
+            f"Paper strategy gates passed; live capital gate bypassed; {size_check}",
+            tuple(checks),
             entry_price=entry,
             stop_price=stop,
             target_price=target,
