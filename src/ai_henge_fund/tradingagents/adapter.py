@@ -60,6 +60,7 @@ class TradingAgentsAdapter:
                 "market_alignment": signal.market_alignment,
                 "setup_state": signal.setup_state,
                 "reasons": list(signal.reasons),
+                "technical_context": dict(signal.technical_context or {}),
             },
             "deterministic_direction": signal.direction,
             "deterministic_score": signal.score,
