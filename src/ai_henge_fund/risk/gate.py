@@ -154,6 +154,16 @@ class RiskGate:
         if risk_per_share <= 0:
             return RiskDecision("WAIT", 0, None, "Invalid trade risk distance", tuple(checks))
 
+        reward_per_share = abs(target - entry)
+        reward_risk = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
+        if reward_risk < self.reward_risk_multiple:
+            return RiskDecision(
+                "WAIT", 0, risk_per_share,
+                f"Reward/risk {reward_risk:.2f} is below minimum {self.reward_risk_multiple:.2f}",
+                tuple(checks), entry_price=entry, stop_price=stop, target_price=target,
+            )
+        checks.append("REWARD_RISK")
+
         # AI sizing is authoritative in both paper and live modes. A missing,
         # non-integral, or non-positive AI quantity is never silently replaced.
         if ai.quantity is None:
