@@ -219,6 +219,12 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
 
         if result.ai_decision in {"BUY", "SELL", "WAIT"}:
             decision_stats[result.ai_decision] += 1
+        provider = result.ai_provider or "unknown"
+        print(f"  provider: {provider}")
+        if result.ai_confidence is not None:
+            print(f"  confidence: {result.ai_confidence:.3f}")
+        if result.quantity_source:
+            print(f"  quantity source: {result.quantity_source}")
         if result.risk.action not in {"BUY", "SELL"}:
             decision_stats["RISK_REJECTED"] += 1
 
