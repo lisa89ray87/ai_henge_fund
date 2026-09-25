@@ -49,7 +49,10 @@ def format_trade_block(symbol: str, *, side: str, quantity: float, entry_price: 
                        stop_price: float | None, target_price: float | None,
                        exit_quantity: float | None, exit_price: float | None,
                        pnl: float | None, reason: str | None) -> str:
-    lines = [symbol, f"  Entry {_qty(quantity)} @ {_money(entry_price)}"]
+    position = "LONG" if side == "BUY" else "SHORT" if side == "SELL" else side
+    entry_label = "Entry" if side == "BUY" else "Short entry" if side == "SELL" else "Entry"
+    exit_label = "Exit" if side == "BUY" else "Cover" if side == "SELL" else "Exit"
+    lines = [symbol, f"  {position} {_qty(quantity)}", f"  {entry_label} {_qty(quantity)} @ {_money(entry_price)}"]
     if reason == "TARGET" and target_price is not None:
         lines.append(f"  Target {_money(target_price)}")
     elif reason == "STOP" and stop_price is not None:
@@ -77,7 +80,9 @@ def _journal_block(entry: TradeJournalEntry, exits) -> tuple[str, float, int]:
         )
         return block, pnl if entry.exit_price is not None else 0.0, 1 if entry.exit_price is not None else 0
 
-    lines = [entry.symbol, f"  Entry {_qty(entry.quantity)} @ {_money(entry.entry_price)}"]
+    position = "LONG" if entry.side == "BUY" else "SHORT" if entry.side == "SELL" else entry.side
+    entry_label = "Entry" if entry.side == "BUY" else "Short entry" if entry.side == "SELL" else "Entry"
+    lines = [entry.symbol, f"  {position} {_qty(entry.quantity)}", f"  {entry_label} {_qty(entry.quantity)} @ {_money(entry.entry_price)}"]
     total_pnl = 0.0
     reasons: list[str] = []
     for event in exits:
@@ -86,7 +91,8 @@ def _journal_block(entry: TradeJournalEntry, exits) -> tuple[str, float, int]:
             lines.append(f"  Target {_money(entry.target_price)}")
         elif reason == "STOP" and entry.stop_price is not None and not any(line.startswith("  Stop ") for line in lines):
             lines.append(f"  Stop {_money(entry.stop_price)}")
-        lines.append(f"  Exit {_qty(event.quantity)} @ {_money(event.exit_price)}")
+        exit_label = "Exit" if entry.side == "BUY" else "Cover" if entry.side == "SELL" else "Exit"
+        lines.append(f"  {exit_label} {_qty(event.quantity)} @ {_money(event.exit_price)}")
         total_pnl += event.realized_pnl
         reasons.append(reason)
     lines.append(f"  P/L {'+' if total_pnl >= 0 else ''}{_money(total_pnl)}")
