@@ -27,11 +27,7 @@ def test_pipeline_opens_paper_position_only_after_all_gates():
     snapshot = SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
         market_state="REGULAR",
-        candles=(
-            {"close": 100, "low": 99, "high": 101},
-            {"close": 101, "low": 100, "high": 102},
-            {"close": 103, "low": 101, "high": 104},
-        ),
+        candles=tuple({"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6} for i in range(20)),
         data_source="test", data_quality="LIVE",
     )
     pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(Runner()))
@@ -128,9 +124,37 @@ def test_pipeline_does_not_open_when_ai_disagrees():
 
     snapshot = SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
-        market_state="REGULAR", candles=tuple({"close": x} for x in [100, 101, 103]),
+        market_state="REGULAR", candles=tuple({"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6} for i in range(20)),
         data_source="test", data_quality="LIVE",
     )
     result = TradingPipeline(ai_adapter=TradingAgentsAdapter(BearishRunner())).evaluate(snapshot)
     assert result.risk.action == "WAIT"
     assert result.lifecycle is None
+
+
+def test_pipeline_rejects_paper_trade_with_low_ai_confidence():
+    class LowConfidenceRunner:
+        def analyze(self, payload):
+            return {
+                "decision": "BUY",
+                "confidence": 0.55,
+                "rationale": "weak confirmation",
+                "quantity": 1,
+                "entry_price": 100.0,
+                "stop_price": 99.0,
+                "target_price": 102.0,
+            }
+
+    snapshot = SignalSnapshot(
+        symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
+        market_state="REGULAR",
+        candles=tuple({"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6} for i in range(20)),
+        data_source="test", data_quality="LIVE",
+    )
+    result = TradingPipeline(ai_adapter=TradingAgentsAdapter(LowConfidenceRunner())).evaluate(
+        snapshot, execute_paper=False
+    )
+    # analyze() still exposes the strategy decision; execution is blocked by the
+    # paper strategy-quality gate before any broker call.
+    assert result.risk.action == "WAIT"
+    assert "AI_CONFIDENCE" not in result.risk.checks
