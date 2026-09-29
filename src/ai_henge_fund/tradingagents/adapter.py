@@ -75,9 +75,17 @@ class TradingAgentsAdapter:
                 "confidence": "0..1",
                 "quantity": "positive whole-number share quantity for BUY/SELL; required for a trade",
                 "entry_price": "planned entry price",
-                "stop_price": "protective stop price",
-                "target_price": "profit target price",
-                "rationale": "brief explanation",
+                "stop_price": "protective stop price based on recent structure and ATR, not an arbitrary fixed distance",
+                "target_price": "profit target price with at least the configured reward/risk multiple",
+                "rationale": "brief explanation including why the setup is valid or why WAIT is safer",
+            },
+            "strategy_rules": {
+                "market_regime": "RISK_ON, NEUTRAL, RISK_OFF, or UNKNOWN from market.metadata",
+                "risk_off": "do not open new LONG positions unless the supplied regime explicitly permits it; prefer WAIT when alignment is weak",
+                "risk_on": "do not open new SHORT positions unless the supplied regime explicitly permits it; prefer WAIT when alignment is weak",
+                "no_trade": "WAIT is a valid and preferred decision when setup quality, regime alignment, entry location, or risk/reward is insufficient",
+                "stop_method": "place the stop beyond recent swing structure with a small ATR buffer",
+                "position_sizing": "size from setup conviction and distance to structural stop; never increase size merely because the stock price is low",
             },
         }
 
