@@ -157,7 +157,7 @@ def _flatten_before_close(market_data, pipeline) -> int:
         try:
             quote = market_data.get_quote(position.symbol)
             price = float(quote.last_price)
-            close_result = pipeline._ensure_lifecycle().close_position(symbol=position.symbol, price=price)
+            close_result = pipeline._ensure_lifecycle().close_position(symbol=position.symbol, price=price, market=True)
             print("PRE-CLOSE " + position.symbol + ": " + close_result.action + " @ $" + format(price, ",.4f"))
             if close_result.action == "CLOSE":
                 closed += 1
