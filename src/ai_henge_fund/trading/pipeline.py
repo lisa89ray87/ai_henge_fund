@@ -161,15 +161,13 @@ class TradingPipeline:
     def analyze(self, snapshot: SignalSnapshot) -> PipelineResult:
         signal = self.signal_engine.evaluate(snapshot)
         ai = self.ai_adapter.analyze(snapshot, signal)
-        settings = get_settings()
-        if not settings.moomoo_live_trading_enabled:
-            risk = self._paper_test_decision(snapshot, signal, ai)
-        else:
-            risk = self.risk_gate.evaluate(
-                snapshot, signal, ai,
-                deployed_capital=self._deployed_capital(),
-                open_position_count=len(self.positions.all()),
-            )
+        risk = self.risk_gate.evaluate(
+            snapshot,
+            signal,
+            ai,
+            deployed_capital=self._deployed_capital(),
+            open_position_count=len(self.positions.all()),
+        )
         return PipelineResult(
             signal.direction, ai.decision, risk, None,
             ai_provider=ai.provider,
