@@ -7,7 +7,7 @@ from ai_henge_fund.tradingagents.adapter import AITradeDecision
 def make_snapshot():
     return SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
-        market_state="REGULAR", candles=tuple({"close": x} for x in [100, 101, 103]),
+        market_state="REGULAR", candles=tuple({"close": 100 + i * 0.3, "low": 99 + i * 0.3, "high": 101 + i * 0.3} for i in range(20)),
         data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_ON"},
     )
 
@@ -15,10 +15,10 @@ def make_snapshot():
 def test_risk_gate_accepts_confirmed_candidate():
     snapshot = make_snapshot()
     signal = DeterministicSignalEngine().evaluate(snapshot)
-    ai = AITradeDecision("US.AAPL", "BUY", 0.85, "confirmed", "test")
+    ai = AITradeDecision("US.AAPL", "BUY", 0.85, "confirmed", "test", quantity=1, entry_price=100, stop_price=99, target_price=102)
     result = RiskGate().evaluate(snapshot, signal, ai)
     assert result.action == "BUY"
-    assert result.quantity == 100
+    assert result.quantity == 1
     assert "AI_CONFIDENCE" in result.checks
 
 
@@ -34,7 +34,7 @@ def test_risk_gate_fails_on_low_ai_confidence():
 def test_risk_gate_rejects_closed_market_state():
     snapshot = SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
-        market_state="AFTER_HOURS_END", candles=tuple({"close": x} for x in [100, 101, 103]),
+        market_state="AFTER_HOURS_END", candles=tuple({"close": 100 + i * 0.3, "low": 99 + i * 0.3, "high": 101 + i * 0.3} for i in range(20)),
         data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_OFF"},
     )
     signal = DeterministicSignalEngine().evaluate(snapshot)
