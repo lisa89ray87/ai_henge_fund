@@ -204,7 +204,7 @@ class MoomooPaperTradeLifecycle:
             entry_price=fill_price, stop_price=stop_price, target_price=target_price,
         )
 
-    def close_position(self, *, symbol, price):
+    def close_position(self, *, symbol, price, market: bool = False):
         symbol = symbol.strip().upper()
         position = self.positions.get(symbol)
         if position is None:
@@ -220,7 +220,7 @@ class MoomooPaperTradeLifecycle:
         quantity = abs(position.quantity)
         if float(int(quantity)) != float(quantity):
             return MoomooLifecycleResult("WAIT", None, "Moomoo stock paper execution requires whole-share quantity")
-        order = self.execution.place_limit(symbol=symbol, side=closing_side, quantity=int(quantity), price=price)
+        order = (self.execution.place_market(symbol=symbol, side=closing_side, quantity=int(quantity)) if market else self.execution.place_limit(symbol=symbol, side=closing_side, quantity=int(quantity), price=price))
         status = self.monitor.wait_for_terminal(order.order_id, timeout_seconds=self.fill_timeout_seconds)
         if status.status not in {FILLED_ALL} or status.filled_quantity <= 0:
             return MoomooLifecycleResult("PENDING", None, "Moomoo paper close order submitted but not fully filled", broker_order_id=order.order_id, broker_status=status.status)
