@@ -7,11 +7,7 @@ from typing import Any, Mapping
 
 @dataclass(frozen=True)
 class SignalSnapshot:
-    """Provider-neutral market snapshot for deterministic engines and TradingAgents.
-
-    The snapshot deliberately carries data quality and source metadata so downstream
-    AI reasoning cannot silently treat limited market data as authoritative.
-    """
+    """Provider-neutral market snapshot for deterministic engines and TradingAgents."""
 
     symbol: str
     timestamp: datetime | None
@@ -48,6 +44,7 @@ def build_signal_snapshot(
     market_state: Any | None = None,
     candles: tuple[Any, ...] | list[Any] = (),
     data_source: str = "moomoo_opend",
+    metadata: Mapping[str, Any] | None = None,
 ) -> SignalSnapshot:
     """Convert normalized market-data objects into the shared snapshot contract."""
 
@@ -76,4 +73,5 @@ def build_signal_snapshot(
         candles=tuple(candle_dicts),
         data_source=data_source,
         data_quality=quality,
+        metadata=dict(metadata or {}),
     )
