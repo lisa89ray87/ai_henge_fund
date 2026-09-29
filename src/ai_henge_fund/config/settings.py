@@ -58,6 +58,10 @@ class AppSettings(BaseSettings):
     ai_henge_fund_risk_per_trade_pct: float = 50.0
     ai_henge_fund_max_positions: int = 0  # 0 = no fixed count limit
     ai_henge_fund_max_daily_loss: float = 10.0
+    # Strategy-quality controls for the paper experiment.
+    ai_henge_fund_min_reward_risk: float = 2.0
+    ai_henge_fund_force_flat_minutes_before_close: int = 10
+    ai_henge_fund_overnight_allowed: bool = False
 
     # Streamlit
     streamlit_server_port: int = 8501
