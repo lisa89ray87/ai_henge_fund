@@ -108,8 +108,48 @@ class MoomooPaperTradeLifecycle:
         )
         return count
 
-    def overnight_handoff(self) -> None:
-        """Stop agent-side monitoring and hand extended-hours responsibility to the user."""
+    def force_flat_and_verify(self, *, max_attempts: int = 3, retry_delay_seconds: float = 1.0) -> bool:
+        """Close locally known paper positions and verify the broker is flat."""
+        for attempt in range(1, max(1, max_attempts) + 1):
+            broker_positions = self.execution.list_positions()
+            if not broker_positions:
+                return True
+            for row in broker_positions:
+                symbol = str(row["symbol"]).strip().upper()
+                local = self.positions.get(symbol)
+                if local is None:
+                    print(f"FORCE-FLAT {symbol}: broker position has no local state; refusing blind close")
+                    continue
+                try:
+                    quote_ret, quote_data = self._quote.get_market_snapshot([symbol])
+                    if quote_ret != 0 or quote_data is None or quote_data.empty:
+                        print(f"FORCE-FLAT {symbol}: quote unavailable on attempt {attempt}")
+                        continue
+                    price = float(quote_data.iloc[0].get("last_price", 0.0) or 0.0)
+                    if price <= 0:
+                        print(f"FORCE-FLAT {symbol}: invalid quote on attempt {attempt}")
+                        continue
+                    result = self.close_position(symbol=symbol, price=price, market=True)
+                    print(f"FORCE-FLAT {symbol}: attempt={attempt} action={result.action} price=${price:,.4f}")
+                except Exception as exc:
+                    print(f"FORCE-FLAT {symbol}: attempt={attempt} FAILED ({exc})")
+            if attempt < max(1, max_attempts):
+                sleep(max(0.0, retry_delay_seconds))
+        remaining = self.execution.list_positions()
+        if remaining:
+            symbols = ", ".join(str(row["symbol"]) for row in remaining)
+            self._notify_text("🚨 FORCE-FLAT FAILED\n" + f"Moomoo paper broker still reports open position(s): {symbols}. Overnight handoff is blocked; manual intervention is required.")
+            print(f"FORCE-FLAT FAILED: broker still has {symbols}")
+            return False
+        return True
+    def overnight_handoff(self) -> bool:
+        """Stop agent-side monitoring only after broker-flat verification."""
+        broker_positions = self.execution.list_positions()
+        if broker_positions:
+            symbols = ", ".join(str(row["symbol"]) for row in broker_positions)
+            print(f"OVERNIGHT HANDOFF BLOCKED: broker still has {symbols}")
+            self._notify_text("🚨 OVERNIGHT HANDOFF BLOCKED\n" + f"Moomoo paper broker still reports open position(s): {symbols}. The agent will not silently stop monitoring an open position.")
+            return False
         for position in self.positions.all():
             target_order_id = self._target_orders.pop(position.symbol, None)
             if target_order_id:
@@ -129,6 +169,7 @@ class MoomooPaperTradeLifecycle:
                 "AI Henge Fund will NOT monitor pre-market, after-hours, or overnight. "
                 "Please monitor the position and create any extended-hours protection manually."
             )
+        return True
 
     def open(self, *, symbol, side, quantity, price, stop_price=None, target_price=None):
         side = side.upper()
