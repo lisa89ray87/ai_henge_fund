@@ -9,6 +9,8 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from ai_henge_fund.agents.tradingagents_bridge import TradingAgentsGraphRuntime
+from ai_henge_fund.config.settings import get_settings
+from ai_henge_fund.market_data.market_regime import classify_market_regime
 from ai_henge_fund.market_data.moomoo_opend import build_moomoo_opend_market_data
 from ai_henge_fund.market_data.signal_snapshot import build_signal_snapshot
 from ai_henge_fund.market_data.stock_universe import get_stock_universe
@@ -143,6 +145,34 @@ def _send_timeout_notification(pipeline: TradingPipeline, snapshot, reason: str)
         print(f"  telegram: SKIP ({exc})")
 
 
+def _flatten_before_close(market_data, pipeline) -> int:
+    """Close paper positions before the regular-session boundary.
+
+    Moomoo US stock paper trading does not support overnight execution, so the
+    paper experiment should not intentionally create an overnight handoff.
+    """
+    closed = 0
+    positions = list(pipeline.positions.all())
+    for position in positions:
+        try:
+            quote = market_data.get_quote(position.symbol)
+            price = float(quote.last_price)
+            result = pipeline.execute_paper_result(
+                type("Snapshot", (), {"symbol": position.symbol, "last_price": price})(),
+                type("Result", (), {
+                    "risk": type("Risk", (), {"action": "SELL" if position.quantity > 0 else "BUY"})(),
+                })(),
+            )
+            _ = result
+            close_result = pipeline._ensure_lifecycle().close_position(symbol=position.symbol, price=price)
+            print("PRE-CLOSE " + position.symbol + ": " + close_result.action + " @ $" + format(price, ",.4f"))
+            if close_result.action == "CLOSE":
+                closed += 1
+        except Exception as exc:
+            print("PRE-CLOSE " + position.symbol + ": FAILED (" + str(exc) + ")")
+    return closed
+
+
 def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size):
     """Scan the universe in quota-safe batches.
 
@@ -158,6 +188,20 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
     cycle_market_state = None
     total = len(universe)
 
+    # Phase 1: broad-market regime is calculated once per scan cycle and
+    # carried into every symbol snapshot. If the regime cannot be established,
+    # the risk gate fails closed to WAIT.
+    try:
+        spy_candles = market_data.get_candles("US.SPY", num=max(20, candle_count), interval=interval)
+        qqq_candles = market_data.get_candles("US.QQQ", num=max(20, candle_count), interval=interval)
+        market_regime = classify_market_regime(spy_candles, qqq_candles)
+        print("MARKET REGIME: " + market_regime.label + " score=" + str(market_regime.score))
+        for reason in market_regime.reasons:
+            print("  " + reason)
+    except Exception as exc:
+        print("MARKET REGIME: UNKNOWN (" + str(exc) + ")")
+        market_regime = classify_market_regime([], [])
+
     for batch_start in range(0, total, subscription_batch_size):
         batch = universe[batch_start:batch_start + subscription_batch_size]
         batch_number = batch_start // subscription_batch_size + 1
@@ -172,7 +216,19 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                 if cycle_market_state is None:
                     cycle_market_state = market_data.get_market_state(symbol)
                     print(f"CYCLE MARKET STATE: {cycle_market_state}")
-                snapshot = build_signal_snapshot(symbol=symbol, quote=quote, market_state=cycle_market_state, candles=candles, data_source="moomoo_opend")
+                snapshot = build_signal_snapshot(
+                    symbol=symbol,
+                    quote=quote,
+                    market_state=cycle_market_state,
+                    candles=candles,
+                    data_source="moomoo_opend",
+                    metadata={
+                        "market_regime": market_regime.label,
+                        "market_regime_score": market_regime.score,
+                        "spy_return_pct": market_regime.spy_return_pct,
+                        "qqq_return_pct": market_regime.qqq_return_pct,
+                    },
+                )
                 signal = signal_engine.evaluate(snapshot)
                 print(f"SCAN {symbol}: {signal.direction} score={signal.score} state={signal.setup_state}")
                 if snapshot.is_usable and signal.direction in {"LONG", "SHORT"}:
@@ -309,9 +365,11 @@ def main() -> int:
                 print(f"Waiting for U.S. regular open at 09:30 ET ({wait_seconds}s).")
                 time.sleep(min(wait_seconds, 300))
                 continue
-            if now >= _session_close(now):
+            force_flat_minutes = get_settings().ai_henge_fund_force_flat_minutes_before_close
+            if now >= (_session_close(now) - __import__("datetime").timedelta(minutes=force_flat_minutes)):
+                closed = _flatten_before_close(market_data, pipeline)
+                print("FORCE-FLAT boundary reached: closed " + str(closed) + " paper position(s) before session end.")
                 pipeline.handoff_paper_session()
-                print("U.S. regular session closed at 16:00 ET. Overnight handoff completed.")
                 break
 
             if not session_resumed:
@@ -324,9 +382,11 @@ def main() -> int:
             else:
                 paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size)
             now = _session_now()
-            if now >= _session_close(now):
+            force_flat_minutes = get_settings().ai_henge_fund_force_flat_minutes_before_close
+            if now >= (_session_close(now) - __import__("datetime").timedelta(minutes=force_flat_minutes)):
+                closed = _flatten_before_close(market_data, pipeline)
+                print("FORCE-FLAT boundary reached: closed " + str(closed) + " paper position(s) before session end.")
                 pipeline.handoff_paper_session()
-                print("U.S. regular session closed. Overnight handoff completed.")
                 break
             sleep_seconds = min(cycle_minutes * 60, max(1, int((_session_close(now) - now).total_seconds())))
             print(f"Next scan in {sleep_seconds // 60} minute(s).")
