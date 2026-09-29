@@ -35,7 +35,7 @@ class RiskGate:
         max_position_value: float | None = None,
         min_ai_confidence: float = 0.70,
         allowed_market_states: Iterable[str] = ("REGULAR", "PRE_MARKET", "AFTERNOON", "AFTER_HOURS"),
-        reward_risk_multiple: float = 2.0,
+        reward_risk_multiple: float | None = None,
     ) -> None:
         settings = get_settings()
         if max_position_value is None:
@@ -44,6 +44,8 @@ class RiskGate:
             raise ValueError("max_position_value must be greater than zero")
         if not 0 <= min_ai_confidence <= 1:
             raise ValueError("min_ai_confidence must be between 0 and 1")
+        if reward_risk_multiple is None:
+            reward_risk_multiple = settings.ai_henge_fund_min_reward_risk
         if reward_risk_multiple <= 0:
             raise ValueError("reward_risk_multiple must be greater than zero")
         self.max_position_value = min(max_position_value, settings.ai_henge_fund_max_capital_deployed)
@@ -123,6 +125,14 @@ class RiskGate:
         checks.append("DETERMINISTIC_SETUP")
 
         expected = "BUY" if signal.direction == "LONG" else "SELL" if signal.direction == "SHORT" else "WAIT"
+        regime = str(snapshot.metadata.get("market_regime", "UNKNOWN")).upper()
+        if regime == "UNKNOWN":
+            return RiskDecision("WAIT", 0, None, "Broad-market regime is unavailable", tuple(checks))
+        if regime == "RISK_OFF" and expected == "BUY":
+            return RiskDecision("WAIT", 0, None, "RISK_OFF regime blocks new LONG entries", tuple(checks + ["MARKET_REGIME"]))
+        if regime == "RISK_ON" and expected == "SELL":
+            return RiskDecision("WAIT", 0, None, "RISK_ON regime blocks new SHORT entries", tuple(checks + ["MARKET_REGIME"]))
+        checks.append("MARKET_REGIME_" + regime)
         if ai.decision != expected:
             return RiskDecision("WAIT", 0, None, "AI decision does not confirm deterministic direction", tuple(checks))
         checks.append("AI_DIRECTION")
@@ -153,6 +163,34 @@ class RiskGate:
         risk_per_share = abs(entry - stop)
         if risk_per_share <= 0:
             return RiskDecision("WAIT", 0, None, "Invalid trade risk distance", tuple(checks))
+
+        # Reject stops that sit inside recent structure. A small ATR buffer
+        # avoids treating a single candle wick as a sufficient invalidation level.
+        candle_ohlc = [c for c in snapshot.candles[-14:] if c.get("high") is not None and c.get("low") is not None]
+        if candle_ohlc:
+            try:
+                atr = sum(float(c["high"]) - float(c["low"]) for c in candle_ohlc) / len(candle_ohlc)
+                recent_ohlc = [c for c in snapshot.candles[-5:] if c.get("high") is not None and c.get("low") is not None]
+                if recent_ohlc and atr > 0:
+                    if expected == "BUY":
+                        swing_low = min(float(c["low"]) for c in recent_ohlc)
+                        structural_limit = min(swing_low, entry - (atr * 0.10))
+                        if stop > structural_limit:
+                            return RiskDecision("WAIT", 0, risk_per_share,
+                                f"LONG stop ${stop:.4f} is inside recent structure/ATR buffer ${structural_limit:.4f}",
+                                tuple(checks + ["STRUCTURAL_STOP_REJECT"]),
+                                entry_price=entry, stop_price=stop, target_price=target)
+                    else:
+                        swing_high = max(float(c["high"]) for c in recent_ohlc)
+                        structural_limit = max(swing_high, entry + (atr * 0.10))
+                        if stop < structural_limit:
+                            return RiskDecision("WAIT", 0, risk_per_share,
+                                f"SHORT stop ${stop:.4f} is inside recent structure/ATR buffer ${structural_limit:.4f}",
+                                tuple(checks + ["STRUCTURAL_STOP_REJECT"]),
+                                entry_price=entry, stop_price=stop, target_price=target)
+                    checks.append("STRUCTURAL_STOP")
+            except (TypeError, ValueError):
+                checks.append("STRUCTURAL_STOP_SKIPPED")
 
         reward_per_share = abs(target - entry)
         reward_risk = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
