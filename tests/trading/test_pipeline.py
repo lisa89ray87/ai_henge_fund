@@ -28,7 +28,7 @@ def test_pipeline_opens_paper_position_only_after_all_gates():
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
         market_state="REGULAR",
         candles=tuple({"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6} for i in range(20)),
-        data_source="test", data_quality="LIVE",
+        data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_ON"},
     )
     pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(Runner()))
 
@@ -149,7 +149,7 @@ def test_pipeline_rejects_paper_trade_with_low_ai_confidence():
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
         market_state="REGULAR",
         candles=tuple({"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6} for i in range(20)),
-        data_source="test", data_quality="LIVE",
+        data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_ON"},
     )
     result = TradingPipeline(ai_adapter=TradingAgentsAdapter(LowConfidenceRunner())).evaluate(
         snapshot, execute_paper=False
