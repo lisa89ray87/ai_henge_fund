@@ -274,6 +274,12 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             print(f"  confidence: {result.ai_confidence:.3f}")
         if result.quantity_source:
             print(f"  quantity source: {result.quantity_source}")
+        print(f"  deterministic score: {result.deterministic_score if result.deterministic_score is not None else 'N/A'}")
+        print(f"  trend/momentum/action: {result.trend or 'N/A'} / {result.momentum or 'N/A'} / {result.price_action or 'N/A'}")
+        print(f"  volume/alignment: {result.volume_confirmation or 'N/A'} / {result.market_alignment or 'N/A'}")
+        print(f"  risk checks: {', '.join(result.risk.checks) if result.risk.checks else 'NONE'}")
+        if result.ai_rationale:
+            print(f"  AI rationale: {result.ai_rationale}")
         if result.risk.action not in {"BUY", "SELL"}:
             decision_stats["RISK_REJECTED"] += 1
 
@@ -362,8 +368,14 @@ def main() -> int:
             force_flat_minutes = strategy_settings.ai_henge_fund_force_flat_minutes_before_close
             if (not strategy_settings.ai_henge_fund_overnight_allowed and now >= (_session_close(now) - timedelta(minutes=force_flat_minutes))):
                 closed = _flatten_before_close(market_data, pipeline)
-                print("FORCE-FLAT boundary reached: closed " + str(closed) + " paper position(s) before session end.")
-                pipeline.handoff_paper_session()
+                verified = pipeline.force_flat_and_verify()
+                print("FORCE-FLAT boundary reached: closed " + str(closed) + " paper position(s); broker_flat=" + str(verified))
+                if not verified:
+                    print("Moomoo signal pipeline: FAIL (force-flat verification failed; overnight handoff blocked)")
+                    return 1
+                if not pipeline.handoff_paper_session():
+                    print("Moomoo signal pipeline: FAIL (overnight handoff refused because broker is not flat)")
+                    return 1
                 break
 
             if not session_resumed:
@@ -379,8 +391,14 @@ def main() -> int:
             force_flat_minutes = get_settings().ai_henge_fund_force_flat_minutes_before_close
             if now >= (_session_close(now) - __import__("datetime").timedelta(minutes=force_flat_minutes)):
                 closed = _flatten_before_close(market_data, pipeline)
-                print("FORCE-FLAT boundary reached: closed " + str(closed) + " paper position(s) before session end.")
-                pipeline.handoff_paper_session()
+                verified = pipeline.force_flat_and_verify()
+                print("FORCE-FLAT boundary reached: closed " + str(closed) + " paper position(s); broker_flat=" + str(verified))
+                if not verified:
+                    print("Moomoo signal pipeline: FAIL (force-flat verification failed; overnight handoff blocked)")
+                    return 1
+                if not pipeline.handoff_paper_session():
+                    print("Moomoo signal pipeline: FAIL (overnight handoff refused because broker is not flat)")
+                    return 1
                 break
             sleep_seconds = min(cycle_minutes * 60, max(1, int((_session_close(now) - now).total_seconds())))
             print(f"Next scan in {sleep_seconds // 60} minute(s).")
