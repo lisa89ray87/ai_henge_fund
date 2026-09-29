@@ -24,6 +24,13 @@ class PipelineResult:
     ai_provider: str | None = None
     ai_confidence: float | None = None
     quantity_source: str | None = None
+    ai_rationale: str | None = None
+    deterministic_score: float | None = None
+    trend: str | None = None
+    momentum: str | None = None
+    price_action: str | None = None
+    volume_confirmation: str | None = None
+    market_alignment: str | None = None
 
 
 class TradingPipeline:
@@ -50,9 +57,13 @@ class TradingPipeline:
     def resume_paper_session(self) -> int:
         return self._ensure_lifecycle().reconcile_startup()
 
-    def handoff_paper_session(self) -> None:
-        if self._lifecycle is not None:
-            self._lifecycle.overnight_handoff()
+    def handoff_paper_session(self) -> bool:
+        if self._lifecycle is None:
+            return True
+        return self._lifecycle.overnight_handoff()
+
+    def force_flat_and_verify(self) -> bool:
+        return self._ensure_lifecycle().force_flat_and_verify()
 
     def close(self):
         if self._lifecycle is not None:
@@ -173,6 +184,13 @@ class TradingPipeline:
             ai_provider=ai.provider,
             ai_confidence=ai.confidence,
             quantity_source=ai.quantity_source,
+            ai_rationale=ai.rationale,
+            deterministic_score=signal.score,
+            trend=signal.trend,
+            momentum=signal.momentum,
+            price_action=signal.price_action,
+            volume_confirmation=signal.volume_confirmation,
+            market_alignment=signal.market_alignment,
         )
 
     def execute_paper_result(self, snapshot: SignalSnapshot, result: PipelineResult) -> PipelineResult:
@@ -200,6 +218,13 @@ class TradingPipeline:
             ai_provider=result.ai_provider,
             ai_confidence=result.ai_confidence,
             quantity_source=result.quantity_source,
+            ai_rationale=result.ai_rationale,
+            deterministic_score=result.deterministic_score,
+            trend=result.trend,
+            momentum=result.momentum,
+            price_action=result.price_action,
+            volume_confirmation=result.volume_confirmation,
+            market_alignment=result.market_alignment,
         )
 
     def evaluate(self, snapshot: SignalSnapshot, *, execute_paper: bool = True) -> PipelineResult:
