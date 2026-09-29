@@ -8,7 +8,7 @@ def make_snapshot():
     return SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
         market_state="REGULAR", candles=tuple({"close": x} for x in [100, 101, 103]),
-        data_source="test", data_quality="LIVE",
+        data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_ON"},
     )
 
 
@@ -35,7 +35,7 @@ def test_risk_gate_rejects_closed_market_state():
     snapshot = SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
         market_state="AFTER_HOURS_END", candles=tuple({"close": x} for x in [100, 101, 103]),
-        data_source="test", data_quality="LIVE",
+        data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_OFF"},
     )
     signal = DeterministicSignalEngine().evaluate(snapshot)
     ai = AITradeDecision("US.AAPL", "BUY", 0.90, "confirmed", "test")
