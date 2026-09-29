@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from ai_henge_fund.agents.tradingagents_bridge import TradingAgentsGraphRuntime
@@ -358,8 +358,9 @@ def main() -> int:
                 print(f"Waiting for U.S. regular open at 09:30 ET ({wait_seconds}s).")
                 time.sleep(min(wait_seconds, 300))
                 continue
-            force_flat_minutes = get_settings().ai_henge_fund_force_flat_minutes_before_close
-            if now >= (_session_close(now) - __import__("datetime").timedelta(minutes=force_flat_minutes)):
+            strategy_settings = get_settings()
+            force_flat_minutes = strategy_settings.ai_henge_fund_force_flat_minutes_before_close
+            if (not strategy_settings.ai_henge_fund_overnight_allowed and now >= (_session_close(now) - timedelta(minutes=force_flat_minutes))):
                 closed = _flatten_before_close(market_data, pipeline)
                 print("FORCE-FLAT boundary reached: closed " + str(closed) + " paper position(s) before session end.")
                 pipeline.handoff_paper_session()
