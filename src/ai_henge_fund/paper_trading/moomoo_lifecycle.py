@@ -231,7 +231,7 @@ class MoomooPaperTradeLifecycle:
             stop_price=stop_price, target_price=target_price, broker_order_id=order.order_id,
         )
         self._state.record_open(
-            trade_id=trade.trade_id, symbol=symbol, side=side, quantity=status.filled_quantity,
+            trade_id=trade.trade_id, symbol=symbol, side=side, quantity=fill_quantity,
             entry_price=fill_price, stop_price=stop_price, target_price=target_price,
             broker_entry_order_id=order.order_id, opened_at=trade.executed_at,
         )
