@@ -240,14 +240,14 @@ class MoomooPaperTradeLifecycle:
         target_order_id = None
         target_protection_ok = True
         if target_price is not None and target_price > 0:
-            target_order_id = self._arm_target(symbol, side, int(status.filled_quantity), float(target_price), notify=True)
+            target_order_id = self._arm_target(symbol, side, int(fill_quantity), float(target_price), notify=True)
             target_protection_ok = target_order_id is not None
 
         if (stop_price is not None and stop_price > 0) or target_order_id:
             self._start_exit_watcher(
                 symbol,
                 side,
-                int(status.filled_quantity),
+                int(fill_quantity),
                 float(stop_price or 0.0),
                 target_order_id,
             )
