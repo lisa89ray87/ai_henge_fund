@@ -41,3 +41,21 @@ def test_risk_gate_rejects_closed_market_state():
     ai = AITradeDecision("US.AAPL", "BUY", 0.90, "confirmed", "test")
     result = RiskGate().evaluate(snapshot, signal, ai)
     assert result.action == "WAIT"
+
+
+def test_risk_gate_allows_candidate_when_market_regime_is_unknown():
+    snapshot = SignalSnapshot(
+        symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
+        market_state="REGULAR",
+        candles=tuple({"close": 100 + i * 0.3, "low": 99 + i * 0.3, "high": 101 + i * 0.3} for i in range(20)),
+        data_source="test", data_quality="LIVE", metadata={"market_regime": "UNKNOWN"},
+    )
+    signal = DeterministicSignalEngine().evaluate(snapshot)
+    ai = AITradeDecision(
+        "US.AAPL", "BUY", 0.85, "confirmed", "test",
+        quantity=1, entry_price=100, stop_price=99, target_price=102,
+    )
+    result = RiskGate().evaluate(snapshot, signal, ai)
+    assert result.action == "BUY"
+    assert "MARKET_REGIME_UNKNOWN" in result.checks
+    assert "Broad-market regime is unavailable" not in result.reason
