@@ -201,7 +201,7 @@ class RiskGate:
             return RiskDecision(
                 "WAIT", 0, risk_per_share,
                 f"Reward/risk {reward_risk:.2f} is below minimum {self.reward_risk_multiple:.2f}",
-                tuple(checks), entry_price=entry, stop_price=stop, target_price=target,
+                tuple(checks + ["REWARD_RISK_REJECT"]), entry_price=entry, stop_price=stop, target_price=target,
             )
         checks.append("REWARD_RISK")
 
