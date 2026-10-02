@@ -158,3 +158,50 @@ def test_pipeline_rejects_paper_trade_with_low_ai_confidence():
     # paper strategy-quality gate before any broker call.
     assert result.risk.action == "WAIT"
     assert "AI_CONFIDENCE" not in result.risk.checks
+
+
+def test_pipeline_retries_once_after_structural_stop_rejection():
+    class RevisionRunner:
+        def __init__(self):
+            self.calls = 0
+
+        def analyze(self, payload):
+            self.calls += 1
+            if self.calls == 1:
+                return {
+                    "decision": "BUY",
+                    "confidence": 0.90,
+                    "rationale": "initial setup",
+                    "quantity": 1,
+                    "entry_price": 100.0,
+                    "stop_price": 99.9,
+                    "target_price": 101.9,
+                }
+            assert payload["task"] == "RISK_AWARE_SETUP_REVISION"
+            return {
+                "decision": "BUY",
+                "confidence": 0.90,
+                "rationale": "revised around structure",
+                "quantity": 1,
+                "entry_price": 100.0,
+                "stop_price": 99.0,
+                "target_price": 102.0,
+            }
+
+    snapshot = SignalSnapshot(
+        symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
+        market_state="REGULAR",
+        candles=tuple(
+            {"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6}
+            for i in range(20)
+        ),
+        data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_ON"},
+    )
+    runner = RevisionRunner()
+    pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(runner))
+    result = pipeline.evaluate(snapshot, execute_paper=False)
+
+    assert runner.calls == 2
+    assert result.risk.action == "BUY"
+    assert result.risk.stop_price == 99.0
+    assert "AI_RISK_REVISION" in result.risk.checks
