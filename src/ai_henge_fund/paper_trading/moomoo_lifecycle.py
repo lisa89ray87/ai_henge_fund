@@ -281,8 +281,31 @@ class MoomooPaperTradeLifecycle:
             return MoomooLifecycleResult("WAIT", None, "Moomoo stock paper execution requires whole-share quantity")
         order = (self.execution.place_market(symbol=symbol, side=closing_side, quantity=int(quantity)) if market else self.execution.place_limit(symbol=symbol, side=closing_side, quantity=int(quantity), price=price))
         status = self.monitor.wait_for_terminal(order.order_id, timeout_seconds=self.fill_timeout_seconds)
-        if status.status not in {FILLED_ALL} or status.filled_quantity <= 0:
-            return MoomooLifecycleResult("PENDING", None, "Moomoo paper close order submitted but not fully filled", broker_order_id=order.order_id, broker_status=status.status)
+        if status.status != FILLED_ALL or status.filled_quantity <= 0:
+            # Reconcile the close before declaring it pending. If nothing filled,
+            # restore the position's target/stop protection instead of leaving it naked.
+            try:
+                self.execution.cancel(order.order_id)
+            except Exception as exc:
+                print(f"CLOSE {symbol}: pending close cancellation failed: {exc}")
+            try:
+                status = self.monitor.get(order.order_id)
+            except Exception as exc:
+                print(f"CLOSE {symbol}: final close reconciliation failed: {exc}")
+                restored_target = self._restore_target_after_partial(symbol, position)
+                self._start_exit_watcher(
+                    symbol, "BUY" if position.quantity > 0 else "SELL",
+                    int(abs(position.quantity)), position.stop_price or 0, restored_target,
+                )
+                return MoomooLifecycleResult("PENDING", None, "Moomoo paper close requires broker reconciliation", broker_order_id=order.order_id, broker_status=status.status)
+            if status.filled_quantity <= 0:
+                restored_target = self._restore_target_after_partial(symbol, position)
+                self._start_exit_watcher(
+                    symbol, "BUY" if position.quantity > 0 else "SELL",
+                    int(abs(position.quantity)), position.stop_price or 0, restored_target,
+                )
+                return MoomooLifecycleResult("PENDING", None, "Moomoo paper close cancelled/unfilled; exit protection restored", broker_order_id=order.order_id, broker_status=status.status)
+            print(f"CLOSE {symbol}: reconciled partial/late fill qty={status.filled_quantity:g} status={status.status}")
         fill_price = status.average_price or price
         trade = PaperTrade(
             trade_id=f"moomoo-{order.order_id}", symbol=symbol, side=closing_side,
