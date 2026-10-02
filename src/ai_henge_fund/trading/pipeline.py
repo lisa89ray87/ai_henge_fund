@@ -169,6 +169,37 @@ class TradingPipeline:
             target_price=target,
         )
 
+    @staticmethod
+    def _risk_revision_feedback(risk: RiskDecision) -> str | None:
+        if "STRUCTURAL_STOP_REJECT" in risk.checks:
+            return (
+                "The proposed stop failed structural validation. "
+                f"{risk.reason}. Recalculate the stop beyond recent swing structure "
+                "and the ATR buffer while keeping the trade thesis intact."
+            )
+        if "REWARD_RISK_REJECT" in risk.checks:
+            return (
+                "The proposed setup failed the minimum reward/risk requirement. "
+                f"{risk.reason}. Rework entry, structural stop, and target together so "
+                "the setup genuinely satisfies the configured minimum reward/risk; "
+                "do not simply claim a higher ratio."
+            )
+        return None
+
+    @staticmethod
+    def _mark_revision(risk: RiskDecision, *, accepted: bool) -> RiskDecision:
+        marker = "AI_RISK_REVISION" if accepted else "AI_RISK_REVISION_FAILED"
+        return RiskDecision(
+            risk.action,
+            risk.quantity,
+            risk.risk_per_share,
+            risk.reason,
+            tuple(risk.checks) + (marker,),
+            entry_price=risk.entry_price,
+            stop_price=risk.stop_price,
+            target_price=risk.target_price,
+        )
+
     def analyze(self, snapshot: SignalSnapshot) -> PipelineResult:
         signal = self.signal_engine.evaluate(snapshot)
         ai = self.ai_adapter.analyze(snapshot, signal)
@@ -179,6 +210,22 @@ class TradingPipeline:
             deployed_capital=self._deployed_capital(),
             open_position_count=len(self.positions.all()),
         )
+
+        # A trade-level risk rejection is allowed one AI revision. This does not
+        # relax any gate: the revised setup must pass the exact same RiskGate.
+        feedback = self._risk_revision_feedback(risk)
+        if feedback and hasattr(self.ai_adapter, "revise"):
+            revised_ai = self.ai_adapter.revise(snapshot, signal, ai, feedback)
+            revised_risk = self.risk_gate.evaluate(
+                snapshot,
+                signal,
+                revised_ai,
+                deployed_capital=self._deployed_capital(),
+                open_position_count=len(self.positions.all()),
+            )
+            ai = revised_ai
+            risk = self._mark_revision(revised_risk, accepted=revised_risk.action in {"BUY", "SELL"})
+
         return PipelineResult(
             signal.direction, ai.decision, risk, None,
             ai_provider=ai.provider,
