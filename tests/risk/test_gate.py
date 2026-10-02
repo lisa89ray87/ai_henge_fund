@@ -59,3 +59,46 @@ def test_risk_gate_allows_candidate_when_market_regime_is_unknown():
     assert result.action == "BUY"
     assert "MARKET_REGIME_UNKNOWN" in result.checks
     assert "Broad-market regime is unavailable" not in result.reason
+
+
+
+def test_aggressive_paper_profile_lowers_confidence_threshold(monkeypatch):
+    monkeypatch.setenv("AI_HEDGE_FUND_RISK_PROFILE", "aggressive_paper")
+    monkeypatch.setenv("MOOMOO_PAPER_TRADING_ENABLED", "true")
+    monkeypatch.setenv("MOOMOO_LIVE_TRADING_ENABLED", "false")
+    from ai_henge_fund.config.settings import get_settings
+    get_settings.cache_clear()
+    try:
+        gate = RiskGate()
+        assert gate.min_ai_confidence == 0.65
+        assert gate.risk_profile == "aggressive_paper"
+    finally:
+        get_settings.cache_clear()
+
+
+def test_aggressive_paper_allows_strong_favorable_setup_at_1_75_rr(monkeypatch):
+    monkeypatch.setenv("AI_HEDGE_FUND_RISK_PROFILE", "aggressive_paper")
+    monkeypatch.setenv("MOOMOO_PAPER_TRADING_ENABLED", "true")
+    monkeypatch.setenv("MOOMOO_LIVE_TRADING_ENABLED", "false")
+    from ai_henge_fund.config.settings import get_settings
+    get_settings.cache_clear()
+    try:
+        snapshot = make_snapshot()
+        signal = DeterministicSignalEngine().evaluate(snapshot)
+        signal = signal.__class__(
+            symbol=signal.symbol, direction="LONG", score=7,
+            trend=signal.trend, momentum=signal.momentum,
+            price_action=signal.price_action, volume_confirmation=signal.volume_confirmation,
+            market_alignment=signal.market_alignment, risk_reward=signal.risk_reward,
+            setup_state="CANDIDATE", reasons=signal.reasons, technical_context=signal.technical_context,
+        )
+        ai = AITradeDecision(
+            "US.AAPL", "BUY", 0.66, "confirmed", "test",
+            quantity=1, entry_price=100, stop_price=99.9, target_price=101.65,
+        )
+        result = RiskGate().evaluate(snapshot, signal, ai)
+        assert result.action == "BUY"
+        assert "RISK_PROFILE_AGGRESSIVE_PAPER" in result.checks
+        assert "ADAPTIVE_REWARD_RISK_1_75" in result.checks
+    finally:
+        get_settings.cache_clear()
