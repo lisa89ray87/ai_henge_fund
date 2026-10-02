@@ -127,7 +127,10 @@ class RiskGate:
         expected = "BUY" if signal.direction == "LONG" else "SELL" if signal.direction == "SHORT" else "WAIT"
         regime = str(snapshot.metadata.get("market_regime", "UNKNOWN")).upper()
         if regime == "UNKNOWN":
-            return RiskDecision("WAIT", 0, None, "Broad-market regime is unavailable", tuple(checks))
+            # Missing broad-market regime is degraded data, not proof that the
+            # individual setup is unsafe. Continue evaluating the candidate,
+            # while making the degraded condition observable for analysis.
+            checks.append("MARKET_REGIME_UNKNOWN")
         if regime == "RISK_OFF" and expected == "BUY":
             return RiskDecision("WAIT", 0, None, "RISK_OFF regime blocks new LONG entries", tuple(checks + ["MARKET_REGIME"]))
         if regime == "RISK_ON" and expected == "SELL":
