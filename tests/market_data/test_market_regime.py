@@ -1,3 +1,5 @@
+from types import SimpleNamespace
+
 from ai_henge_fund.market_data.market_regime import classify_market_regime
 
 
@@ -19,6 +21,16 @@ def test_market_regime_risk_on():
         _candles([100, 100.4, 100.8, 101.2, 101.6, 102.0]),
     )
     assert regime.label == "RISK_ON"
+
+
+def test_market_regime_supports_native_moomoo_rows():
+    regime = classify_market_regime(
+        tuple(SimpleNamespace(close=value) for value in [100, 100.3, 100.6, 100.9, 101.2, 101.5]),
+        tuple(SimpleNamespace(close=value) for value in [100, 100.4, 100.8, 101.2, 101.6, 102.0]),
+    )
+    assert regime.label == "RISK_ON"
+    assert regime.spy_return_pct is not None
+    assert regime.qqq_return_pct is not None
 
 
 def test_market_regime_unknown_without_data():
