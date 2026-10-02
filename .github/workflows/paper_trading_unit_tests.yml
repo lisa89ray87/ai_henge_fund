@@ -8,6 +8,8 @@ on:
       - "src/ai_henge_fund/portfolio/**"
       - "scripts/send_paper_day_summary.py"
       - "tests/paper_trading/**"
+      - "tests/risk/**"
+      - "tests/market_data/**"
       - ".github/workflows/paper_trading_unit_tests.yml"
 
 jobs:
@@ -26,4 +28,4 @@ jobs:
       - name: Run trade journal, lifecycle, and position unit tests
         shell: powershell
         run: |
-          & $env:PYTHON_312_PATH -m pytest tests\paper_trading\test_trade_journal_v2.py tests\paper_trading\test_moomoo_lifecycle_journal.py tests\paper_trading\test_partial_position.py -q
+          & $env:PYTHON_312_PATH -m pytest tests\paper_trading\test_trade_journal_v2.py tests\paper_trading\test_moomoo_lifecycle_journal.py tests\paper_trading\test_partial_position.py tests\risk\test_gate.py tests\market_data\test_market_regime.py -q
