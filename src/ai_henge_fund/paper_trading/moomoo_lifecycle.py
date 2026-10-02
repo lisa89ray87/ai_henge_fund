@@ -188,17 +188,35 @@ class MoomooPaperTradeLifecycle:
         order = self.execution.place_limit(symbol=symbol, side=side, quantity=requested_quantity, price=price)
         status = self.monitor.wait_for_terminal(order.order_id, timeout_seconds=self.fill_timeout_seconds)
         if status.status != FILLED_ALL or status.filled_quantity < requested_quantity:
-            return MoomooLifecycleResult(
-                "PENDING", None, "Moomoo paper order submitted but not fully filled",
-                broker_order_id=order.order_id, broker_status=status.status,
-                entry_price=price, stop_price=stop_price, target_price=target_price,
-            )
+            # Never leave a timed-out entry silently working. Cancel the remainder,
+            # then re-read the broker order so a late/partial fill is reconciled.
+            try:
+                self.execution.cancel(order.order_id)
+            except Exception as exc:
+                print(f"OPEN {symbol}: pending entry cancellation failed: {exc}")
+            try:
+                status = self.monitor.get(order.order_id)
+            except Exception as exc:
+                print(f"OPEN {symbol}: final pending-entry reconciliation failed: {exc}")
+                return MoomooLifecycleResult(
+                    "PENDING", None, "Moomoo paper entry requires broker reconciliation",
+                    broker_order_id=order.order_id, broker_status=status.status,
+                    entry_price=price, stop_price=stop_price, target_price=target_price,
+                )
+            if status.filled_quantity <= 0:
+                return MoomooLifecycleResult(
+                    "PENDING", None, "Moomoo paper entry cancelled/unfilled",
+                    broker_order_id=order.order_id, broker_status=status.status,
+                    entry_price=price, stop_price=stop_price, target_price=target_price,
+                )
+            print(f"OPEN {symbol}: reconciled partial/late fill qty={status.filled_quantity:g} status={status.status}")
 
+        fill_quantity = min(float(status.filled_quantity), float(requested_quantity))
         fill_price = status.average_price or price
-        signed_quantity = status.filled_quantity if side == "BUY" else -status.filled_quantity
+        signed_quantity = fill_quantity if side == "BUY" else -fill_quantity
         trade = PaperTrade(
             trade_id=f"moomoo-{order.order_id}", symbol=symbol, side=side,
-            quantity=status.filled_quantity, price=fill_price,
+            quantity=fill_quantity, price=fill_price,
             executed_at=datetime.now(timezone.utc), status=FILLED_ALL,
             metadata={
                 "broker": "moomoo", "trading_environment": "SIMULATE",
@@ -209,7 +227,7 @@ class MoomooPaperTradeLifecycle:
         )
         self.positions.open_signed(symbol, signed_quantity, fill_price, stop_price=stop_price, target_price=target_price)
         self._state.upsert(
-            symbol=symbol, side=side, quantity=status.filled_quantity, entry_price=fill_price,
+            symbol=symbol, side=side, quantity=fill_quantity, entry_price=fill_price,
             stop_price=stop_price, target_price=target_price, broker_order_id=order.order_id,
         )
         self._state.record_open(
@@ -364,9 +382,24 @@ class MoomooPaperTradeLifecycle:
                             fill_price = exit_status.average_price or last_price
                             trade = self._exit_trade(symbol, exit_side, exit_status.filled_quantity, fill_price, exit_order.order_id, "STOP")
                             self._notify(trade, "MOOMOO_PAPER_STOP_FILL", stop_price=stop_price)
-                        else:
-                            print(f"EXIT {symbol}: stop market order did not fully fill: {exit_status.status}")
-                        return
+                            return
+                        # Do not abandon the stop watcher after a timeout. Cancel any
+                        # still-working order, reconcile it, then retry on the next loop.
+                        try:
+                            self.execution.cancel(exit_order.order_id)
+                        except Exception as exc:
+                            print(f"EXIT {symbol}: stop-order cancellation failed: {exc}")
+                        try:
+                            final_status = self.monitor.get(exit_order.order_id)
+                        except Exception as exc:
+                            print(f"EXIT {symbol}: stop-order reconciliation failed: {exc}")
+                            continue
+                        if final_status.filled_quantity > 0:
+                            fill_price = final_status.average_price or last_price
+                            trade = self._exit_trade(symbol, exit_side, final_status.filled_quantity, fill_price, exit_order.order_id, "STOP")
+                            self._notify(trade, "MOOMOO_PAPER_STOP_FILL", stop_price=stop_price)
+                            return
+                        print(f"EXIT {symbol}: stop exit not filled ({final_status.status}); watcher will retry.")
             except Exception as exc:
                 print(f"EXIT {symbol}: watcher error: {exc}")
             sleep(self.exit_poll_seconds)
