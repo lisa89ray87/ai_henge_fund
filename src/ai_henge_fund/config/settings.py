@@ -59,6 +59,7 @@ class AppSettings(BaseSettings):
     ai_henge_fund_max_positions: int = 0  # 0 = no fixed count limit
     ai_henge_fund_max_daily_loss: float = 10.0
     # Strategy-quality controls for the paper experiment.
+    ai_henge_fund_risk_profile: Literal["standard", "aggressive_paper"] = "standard"
     ai_henge_fund_min_reward_risk: float = 2.0
     ai_henge_fund_force_flat_minutes_before_close: int = 10
     ai_henge_fund_overnight_allowed: bool = False
@@ -106,6 +107,8 @@ class AppSettings(BaseSettings):
             raise ValueError("AI_HEDGE_FUND_MAX_POSITIONS must be zero or greater.")
         if self.ai_henge_fund_max_daily_loss <= 0:
             raise ValueError("AI_HEDGE_FUND_MAX_DAILY_LOSS must be greater than zero.")
+        if self.ai_henge_fund_risk_profile == "aggressive_paper" and self.moomoo_live_trading_enabled:
+            raise ValueError("AI_HEDGE_FUND_RISK_PROFILE=aggressive_paper cannot be used with live trading.")
 
         return self
 
