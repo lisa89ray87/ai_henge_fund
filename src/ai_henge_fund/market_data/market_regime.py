@@ -8,7 +8,7 @@ regime, but it does not get to override the safety classification.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 
 @dataclass(frozen=True)
@@ -21,19 +21,24 @@ class MarketRegime:
     reasons: tuple[str, ...]
 
 
-def _closes(candles: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]]) -> list[float]:
-    values: list[float] = []
-    for candle in candles:
-        try:
-            value = float(candle.get("close"))
-        except (TypeError, ValueError):
-            continue
-        if value > 0:
-            values.append(value)
-    return values
+def _close_value(candle: Any) -> float | None:
+    """Read a close from either normalized mappings or native Moomoo rows."""
+    try:
+        if isinstance(candle, Mapping):
+            raw = candle.get("close")
+        else:
+            raw = getattr(candle, "close", None)
+        value = float(raw)
+    except (AttributeError, TypeError, ValueError):
+        return None
+    return value if value > 0 else None
 
 
-def _return_pct(candles: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]], lookback: int = 4) -> float | None:
+def _closes(candles: Sequence[Any]) -> list[float]:
+    return [value for candle in candles if (value := _close_value(candle)) is not None]
+
+
+def _return_pct(candles: Sequence[Any], lookback: int = 4) -> float | None:
     closes = _closes(candles)
     if len(closes) <= lookback:
         return None
@@ -42,8 +47,8 @@ def _return_pct(candles: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]]
 
 
 def classify_market_regime(
-    spy_candles: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
-    qqq_candles: tuple[Mapping[str, Any], ...] | list[Mapping[str, Any]],
+    spy_candles: Sequence[Any],
+    qqq_candles: Sequence[Any],
 ) -> MarketRegime:
     """Classify broad tape as RISK_ON, NEUTRAL, or RISK_OFF.
 
