@@ -70,3 +70,40 @@ def test_adapter_requests_ai_sizing_when_trade_has_no_quantity():
     assert len(runner.calls) == 2
     assert runner.calls[1]["task"] == "POSITION_SIZING_ONLY"
     assert runner.calls[1]["requested_output"]["quantity"].startswith("REQUIRED")
+
+
+def test_adapter_revise_sends_risk_constraints_to_runner():
+    class Runner:
+        def __init__(self):
+            self.calls = []
+
+        def analyze(self, payload):
+            self.calls.append(payload)
+            return {
+                "decision": "BUY",
+                "confidence": 0.9,
+                "quantity": 1,
+                "entry_price": 103,
+                "stop_price": 101,
+                "target_price": 107,
+                "rationale": "revised",
+                "provider": "test-model",
+            }
+
+    runner = Runner()
+    snapshot = make_snapshot()
+    signal = DeterministicSignalEngine().evaluate(snapshot)
+    adapter = TradingAgentsAdapter(runner)
+    previous = adapter.analyze(snapshot, signal)
+    revised = adapter.revise(
+        snapshot,
+        signal,
+        previous,
+        "The proposed stop failed structural validation.",
+    )
+
+    assert revised.stop_price == 101
+    assert len(runner.calls) == 2
+    assert runner.calls[1]["task"] == "RISK_AWARE_SETUP_REVISION"
+    assert "structural validation" in runner.calls[1]["risk_feedback"]
+    assert runner.calls[1]["previous_trade_levels"]["stop_price"] == previous.stop_price
