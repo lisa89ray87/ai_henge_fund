@@ -53,7 +53,9 @@ class RiskGate:
         self.risk_per_trade_pct = settings.ai_henge_fund_risk_per_trade_pct
         self.max_daily_loss = settings.ai_henge_fund_max_daily_loss
         self.max_positions = settings.ai_henge_fund_max_positions
-        self.min_ai_confidence = min_ai_confidence
+        self.risk_profile = settings.ai_henge_fund_risk_profile
+        self.paper_mode = bool(settings.moomoo_paper_trading_enabled and not settings.moomoo_live_trading_enabled)
+        self.min_ai_confidence = 0.65 if self.risk_profile == "aggressive_paper" and self.paper_mode else min_ai_confidence
         self.allowed_market_states = frozenset(allowed_market_states)
         self.reward_risk_multiple = reward_risk_multiple
         self.paper_mode = bool(settings.moomoo_paper_trading_enabled and not settings.moomoo_live_trading_enabled)
@@ -107,6 +109,8 @@ class RiskGate:
         open_position_count: int = 0,
     ) -> RiskDecision:
         checks: list[str] = []
+        if self.risk_profile == "aggressive_paper" and self.paper_mode:
+            checks.append("RISK_PROFILE_AGGRESSIVE_PAPER")
 
         if not snapshot.is_usable:
             return RiskDecision("WAIT", 0, None, "Market snapshot is not usable", tuple(checks))
@@ -177,7 +181,8 @@ class RiskGate:
                 if recent_ohlc and atr > 0:
                     if expected == "BUY":
                         swing_low = min(float(c["low"]) for c in recent_ohlc)
-                        structural_limit = min(swing_low, entry - (atr * 0.10))
+                        buffer_multiple = 0.05 if self.risk_profile == "aggressive_paper" and self.paper_mode else 0.10
+                        structural_limit = min(swing_low, entry - (atr * buffer_multiple))
                         if stop > structural_limit:
                             return RiskDecision("WAIT", 0, risk_per_share,
                                 f"LONG stop ${stop:.4f} is inside recent structure/ATR buffer ${structural_limit:.4f}",
@@ -185,7 +190,8 @@ class RiskGate:
                                 entry_price=entry, stop_price=stop, target_price=target)
                     else:
                         swing_high = max(float(c["high"]) for c in recent_ohlc)
-                        structural_limit = max(swing_high, entry + (atr * 0.10))
+                        buffer_multiple = 0.05 if self.risk_profile == "aggressive_paper" and self.paper_mode else 0.10
+                        structural_limit = max(swing_high, entry + (atr * buffer_multiple))
                         if stop < structural_limit:
                             return RiskDecision("WAIT", 0, risk_per_share,
                                 f"SHORT stop ${stop:.4f} is inside recent structure/ATR buffer ${structural_limit:.4f}",
@@ -197,10 +203,16 @@ class RiskGate:
 
         reward_per_share = abs(target - entry)
         reward_risk = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
-        if reward_risk < self.reward_risk_multiple:
+        effective_reward_risk = self.reward_risk_multiple
+        if self.risk_profile == "aggressive_paper" and self.paper_mode:
+            favorable_regime = (regime == "RISK_ON" and expected == "BUY") or (regime == "RISK_OFF" and expected == "SELL")
+            if abs(signal.score) >= 7 and favorable_regime:
+                effective_reward_risk = 1.75
+                checks.append("ADAPTIVE_REWARD_RISK_1_75")
+        if reward_risk < effective_reward_risk:
             return RiskDecision(
                 "WAIT", 0, risk_per_share,
-                f"Reward/risk {reward_risk:.2f} is below minimum {self.reward_risk_multiple:.2f}",
+                f"Reward/risk {reward_risk:.2f} is below minimum {effective_reward_risk:.2f}",
                 tuple(checks + ["REWARD_RISK_REJECT"]), entry_price=entry, stop_price=stop, target_price=target,
             )
         checks.append("REWARD_RISK")
