@@ -43,10 +43,14 @@ class TradingAgentsAdapter:
                 return None
         return None
 
-    def analyze(self, snapshot: SignalSnapshot, signal: DeterministicSignal) -> AITradeDecision:
-        if not snapshot.is_usable:
-            return AITradeDecision(snapshot.symbol, "WAIT", 0.0, "Market snapshot is not usable", "none")
-
+    def _build_payload(
+        self,
+        snapshot: SignalSnapshot,
+        signal: DeterministicSignal,
+        *,
+        risk_feedback: str | None = None,
+        previous_levels: tuple[float, float, float] | None = None,
+    ) -> dict[str, Any]:
         payload = {
             "symbol": snapshot.symbol,
             "market": snapshot.to_dict(),
@@ -88,6 +92,49 @@ class TradingAgentsAdapter:
                 "position_sizing": "size from setup conviction and distance to structural stop; never increase size merely because the stock price is low",
             },
         }
+        if risk_feedback:
+            payload["task"] = "RISK_AWARE_SETUP_REVISION"
+            payload["risk_feedback"] = risk_feedback
+            if previous_levels is not None:
+                entry, stop, target = previous_levels
+                payload["previous_trade_levels"] = {
+                    "entry_price": entry,
+                    "stop_price": stop,
+                    "target_price": target,
+                }
+            payload["strategy_rules"]["revision_rule"] = (
+                "Revise the setup only if the thesis remains valid. Do not weaken or bypass "
+                "structural-stop or minimum reward/risk protections. If no valid setup can "
+                "satisfy the supplied constraints, return WAIT."
+            )
+        return payload
+
+    def _decision_from_result(self, snapshot: SignalSnapshot, result: dict[str, Any]) -> AITradeDecision:
+        decision = str(result.get("decision", "WAIT")).upper()
+        if decision not in {"BUY", "SELL", "WAIT"}:
+            decision = "WAIT"
+        try:
+            confidence = max(0.0, min(1.0, float(result.get("confidence", 0.0))))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        rationale = str(result.get("rationale", "No rationale returned"))
+        provider = str(result.get("provider", "tradingagents"))
+        quantity = self._optional_float(result, "quantity", "shares", "position_size")
+        entry_price = self._optional_float(result, "entry_price", "entry")
+        stop_price = self._optional_float(result, "stop_price", "stop")
+        target_price = self._optional_float(result, "target_price", "target")
+        quantity_source = str(result.get("quantity_source", "")).strip() or None
+        return AITradeDecision(
+            snapshot.symbol, decision, confidence, rationale, provider,
+            quantity=quantity, entry_price=entry_price, stop_price=stop_price,
+            target_price=target_price, quantity_source=quantity_source,
+        )
+
+    def analyze(self, snapshot: SignalSnapshot, signal: DeterministicSignal) -> AITradeDecision:
+        if not snapshot.is_usable:
+            return AITradeDecision(snapshot.symbol, "WAIT", 0.0, "Market snapshot is not usable", "none")
+
+        payload = self._build_payload(snapshot, signal)
 
         if self.runner is None:
             fallback_decision = {"LONG": "BUY", "SHORT": "SELL", "NEUTRAL": "WAIT"}.get(signal.direction, "WAIT")
@@ -103,29 +150,25 @@ class TradingAgentsAdapter:
                 quantity_source="deterministic-fallback" if quantity is not None else None,
             )
 
-        result = self.runner.analyze(payload)
-        decision = str(result.get("decision", "WAIT")).upper()
-        if decision not in {"BUY", "SELL", "WAIT"}:
-            decision = "WAIT"
-        confidence = max(0.0, min(1.0, float(result.get("confidence", 0.0))))
-        rationale = str(result.get("rationale", "No rationale returned"))
-        provider = str(result.get("provider", "tradingagents"))
+        return self._decision_from_result(snapshot, self.runner.analyze(payload))
 
-        quantity = self._optional_float(result, "quantity", "shares", "position_size")
-        entry_price = self._optional_float(result, "entry_price", "entry")
-        stop_price = self._optional_float(result, "stop_price", "stop")
-        target_price = self._optional_float(result, "target_price", "target")
-        quantity_source = str(result.get("quantity_source", "")).strip() or None
-
-        return AITradeDecision(
-            snapshot.symbol,
-            decision,
-            confidence,
-            rationale,
-            provider,
-            quantity=quantity,
-            entry_price=entry_price,
-            stop_price=stop_price,
-            target_price=target_price,
-            quantity_source=quantity_source,
+    def revise(
+        self,
+        snapshot: SignalSnapshot,
+        signal: DeterministicSignal,
+        previous: AITradeDecision,
+        risk_feedback: str,
+    ) -> AITradeDecision:
+        """Give the configured AI one risk-aware setup revision, never a risk bypass."""
+        if self.runner is None or previous.decision not in {"BUY", "SELL"}:
+            return previous
+        previous_levels = None
+        if previous.entry_price is not None and previous.stop_price is not None and previous.target_price is not None:
+            previous_levels = (previous.entry_price, previous.stop_price, previous.target_price)
+        payload = self._build_payload(
+            snapshot,
+            signal,
+            risk_feedback=risk_feedback,
+            previous_levels=previous_levels,
         )
+        return self._decision_from_result(snapshot, self.runner.analyze(payload))
