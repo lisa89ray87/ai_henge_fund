@@ -138,7 +138,10 @@ class TradingAgentsAdapter:
 
         if self.runner is None:
             fallback_decision = {"LONG": "BUY", "SHORT": "SELL", "NEUTRAL": "WAIT"}.get(signal.direction, "WAIT")
-            fallback_confidence = min(1.0, abs(signal.score) / 8.0)
+            # A deterministic fallback has no independent AI confidence.
+            # Keep it below the risk threshold rather than presenting the
+            # deterministic score as if an AI model had confirmed it.
+            fallback_confidence = 0.0
             quantity = 1.0 if fallback_decision in {"BUY", "SELL"} else None
             return AITradeDecision(
                 snapshot.symbol,
@@ -150,7 +153,40 @@ class TradingAgentsAdapter:
                 quantity_source="deterministic-fallback" if quantity is not None else None,
             )
 
-        return self._decision_from_result(snapshot, self.runner.analyze(payload))
+        decision = self._decision_from_result(snapshot, self.runner.analyze(payload))
+        return self._ensure_ai_sizing(payload, decision)
+
+    def _ensure_ai_sizing(
+        self,
+        payload: dict[str, Any],
+        decision: AITradeDecision,
+    ) -> AITradeDecision:
+        if self.runner is None or decision.decision not in {"BUY", "SELL"} or decision.quantity is not None:
+            return decision
+
+        sizing_payload = dict(payload)
+        sizing_payload["task"] = "POSITION_SIZING_ONLY"
+        sizing_payload["requested_output"] = {
+            "quantity": "REQUIRED positive whole-number share quantity for the confirmed trade",
+            "reason": "brief sizing rationale",
+        }
+        sizing_result = self.runner.analyze(sizing_payload)
+        quantity = self._optional_float(sizing_result, "quantity", "shares", "position_size")
+        if quantity is None:
+            return decision
+        sizing_provider = str(sizing_result.get("provider", "tradingagents")).strip() or "tradingagents"
+        return AITradeDecision(
+            decision.symbol,
+            decision.decision,
+            decision.confidence,
+            decision.rationale,
+            f"{decision.provider}|sizing:{sizing_provider}",
+            quantity=quantity,
+            entry_price=decision.entry_price,
+            stop_price=decision.stop_price,
+            target_price=decision.target_price,
+            quantity_source=f"ai:{sizing_provider}",
+        )
 
     def revise(
         self,
@@ -171,4 +207,5 @@ class TradingAgentsAdapter:
             risk_feedback=risk_feedback,
             previous_levels=previous_levels,
         )
-        return self._decision_from_result(snapshot, self.runner.analyze(payload))
+        decision = self._decision_from_result(snapshot, self.runner.analyze(payload))
+        return self._ensure_ai_sizing(payload, decision)
