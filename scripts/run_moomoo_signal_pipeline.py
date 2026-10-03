@@ -447,7 +447,7 @@ def main() -> int:
                 try:
                     print("Starting once-per-session premarket analysis...")
                     premarket_context, market_data = _run_premarket_analysis(
-                        market_data, universe, GraphRunner(), max_notable=12
+                        market_data, universe, pipeline.ai_adapter.runner, max_notable=12
                     )
                 except Exception as exc:
                     print(f"PREMARKET ANALYSIS: FAILED ({exc}); continuing without AI premarket context")
