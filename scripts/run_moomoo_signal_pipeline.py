@@ -12,6 +12,7 @@ from ai_henge_fund.agents.tradingagents_bridge import TradingAgentsGraphRuntime
 from ai_henge_fund.config.settings import get_settings
 from ai_henge_fund.market_data.market_regime import classify_market_regime
 from ai_henge_fund.market_data.moomoo_opend import build_moomoo_opend_market_data
+from ai_henge_fund.market_data.premarket import PremarketContext, build_premarket_candidates, extract_premarket, summarize_quote
 from ai_henge_fund.market_data.signal_snapshot import build_signal_snapshot
 from ai_henge_fund.market_data.stock_universe import get_stock_universe
 from ai_henge_fund.signal_engine.deterministic import DeterministicSignalEngine
@@ -67,12 +68,84 @@ def _session_now() -> datetime:
     return datetime.now(ZoneInfo("America/New_York"))
 
 
+def _premarket_start(now: datetime) -> datetime:
+    return now.replace(hour=8, minute=45, second=0, microsecond=0)
+
+
 def _session_open(now: datetime) -> datetime:
     return now.replace(hour=9, minute=30, second=0, microsecond=0)
 
 
 def _session_close(now: datetime) -> datetime:
     return now.replace(hour=16, minute=0, second=0, microsecond=0)
+
+
+
+def _run_premarket_analysis(market_data, universe, ai_runner, *, max_notable: int = 12):
+    """Collect read-only US premarket quotes and run exactly one AI context call."""
+    market_data.close()
+    market_data = build_moomoo_opend_market_data()
+    quotes = []
+    special_quotes = {}
+    symbols = ["US.SPY", "US.QQQ", *universe]
+    seen = set()
+    for batch_start in range(0, len(symbols), 45):
+        batch = [s for s in symbols[batch_start:batch_start + 45] if s not in seen]
+        seen.update(batch)
+        for symbol in batch:
+            try:
+                quote = market_data.get_quote(symbol)
+                quotes.append(quote)
+                if symbol in {"US.SPY", "US.QQQ"}:
+                    special_quotes[symbol] = quote
+            except Exception as exc:
+                print(f"PREMARKET {symbol}: SKIP ({exc})")
+        if batch_start + len(batch) < len(symbols):
+            market_data.close()
+            market_data = build_moomoo_opend_market_data()
+
+    stock_quotes = [
+        quote for quote in quotes
+        if getattr(quote, "symbol", "") not in {"US.SPY", "US.QQQ"}
+    ]
+    contexts = [extract_premarket(quote) for quote in stock_quotes]
+    notable = build_premarket_candidates(stock_quotes, limit=max_notable)
+    spy = summarize_quote(special_quotes["US.SPY"]) if "US.SPY" in special_quotes else {"symbol": "US.SPY"}
+    qqq = summarize_quote(special_quotes["US.QQQ"]) if "US.QQQ" in special_quotes else {"symbol": "US.QQQ"}
+
+    ai_input = {
+        "spy": spy,
+        "qqq": qqq,
+        "notable_symbols": [item.to_dict() for item in notable],
+    }
+    ai_result = ai_runner.analyze_premarket(ai_input)
+    context = PremarketContext(
+        generated_at=_session_now(),
+        market_bias=ai_result["market_bias"],
+        market_confidence=float(ai_result["confidence"]),
+        market_risk=ai_result["market_risk"],
+        spy=spy,
+        qqq=qqq,
+        notable_symbols=tuple(notable),
+        symbol_contexts=tuple(contexts),
+        ai_rationale=ai_result["rationale"],
+        ai_provider=ai_result["provider"],
+    )
+    print(
+        f"PREMARKET AI: bias={context.market_bias} confidence={context.market_confidence:.2f} "
+        f"risk={context.market_risk} provider={context.ai_provider}"
+    )
+    print(f"PREMARKET AI RATIONALE: {context.ai_rationale}")
+    print(
+        f"PREMARKET SPY: {spy.get('premarket_price')} ({spy.get('premarket_change_pct')}%) | "
+        f"QQQ: {qqq.get('premarket_price')} ({qqq.get('premarket_change_pct')}%)"
+    )
+    for item in notable:
+        print(
+            f"PREMARKET MOVER {item.symbol}: {item.premarket_price} "
+            f"({item.premarket_change_pct}%) vol={item.premarket_volume}"
+        )
+    return context, market_data
 
 
 def _analyze_with_timeout(pipeline: TradingPipeline, snapshot, timeout_seconds: float) -> tuple[PipelineResult | None, str | None]:
@@ -166,7 +239,7 @@ def _flatten_before_close(market_data, pipeline) -> int:
     return closed
 
 
-def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size):
+def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size):
     """Scan the universe in quota-safe batches.
 
     OpenD subscriptions persist on the quote context. Each symbol needs both a
@@ -220,6 +293,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                         "market_regime_score": market_regime.score,
                         "spy_return_pct": market_regime.spy_return_pct,
                         "qqq_return_pct": market_regime.qqq_return_pct,
+                        "premarket": premarket_context.for_symbol(symbol) if premarket_context else None,
                     },
                 )
                 signal = signal_engine.evaluate(snapshot)
@@ -348,20 +422,38 @@ def main() -> int:
     signal_engine = DeterministicSignalEngine()
     paper_trades = 0
     session_resumed = False
+    premarket_context = None
+    premarket_done = False
     try:
         while True:
             now = _session_now()
             if not session_loop:
                 pipeline.resume_paper_session()
-                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size)
+                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size)
                 pipeline.handoff_paper_session()
                 break
             if now.weekday() >= 5:
                 print(f"U.S. market is closed today ({now:%A}). Exiting cleanly.")
                 break
+            if not premarket_done:
+                if now < _premarket_start(now):
+                    wait_seconds = max(1, int((_premarket_start(now) - now).total_seconds()))
+                    print(f"Waiting for U.S. premarket analysis window at 08:45 ET ({wait_seconds}s).")
+                    time.sleep(min(wait_seconds, 300))
+                    continue
+                try:
+                    print("Starting once-per-session premarket analysis...")
+                    premarket_context, market_data = _run_premarket_analysis(
+                        market_data, universe, GraphRunner(), max_notable=12
+                    )
+                except Exception as exc:
+                    print(f"PREMARKET ANALYSIS: FAILED ({exc}); continuing without AI premarket context")
+                    premarket_context = None
+                premarket_done = True
+
             if now < _session_open(now):
                 wait_seconds = max(1, int((_session_open(now) - now).total_seconds()))
-                print(f"Waiting for U.S. regular open at 09:30 ET ({wait_seconds}s).")
+                print(f"Premarket analysis complete. Waiting for U.S. regular open at 09:30 ET ({wait_seconds}s).")
                 time.sleep(min(wait_seconds, 300))
                 continue
             strategy_settings = get_settings()
