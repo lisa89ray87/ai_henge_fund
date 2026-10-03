@@ -240,6 +240,8 @@ class TradingAgentsGraphRuntime:
             "volume": market.get("volume"),
             "market_state": market.get("market_state"),
             "data_quality": market.get("data_quality"),
+            "premarket": market.get("metadata", {}).get("premarket"),
+            "market_regime": market.get("metadata", {}).get("market_regime"),
             "candles": candles,
         }
         prompt = f"""
