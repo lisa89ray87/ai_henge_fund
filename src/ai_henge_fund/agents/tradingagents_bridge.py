@@ -300,6 +300,62 @@ MOOMOO SNAPSHOT:
             quantity_source="ai-google_genai-lightweight" if quantity is not None else None,
         )
 
+    def analyze_premarket(self, context: dict[str, Any]) -> dict[str, Any]:
+        """Run exactly one compact AI call for the whole premarket context."""
+        if not self._has_gemini_key() and not self._has_key("OPENAI_API_KEY"):
+            return {
+                "market_bias": "NEUTRAL",
+                "confidence": 0.0,
+                "market_risk": "UNKNOWN",
+                "rationale": "No AI provider configured; deterministic premarket context retained.",
+                "provider": "deterministic-fallback",
+            }
+
+        prompt = f"""
+You are the pre-market context layer for a PAPER/SIMULATE US stock trading system.
+Use ONLY the supplied Moomoo pre-market data. Do not fetch external data or invent facts.
+This is context, NOT a trade signal. Return one compact JSON object.
+
+Required fields:
+- market_bias: BULLISH, BEARISH, or NEUTRAL
+- confidence: number 0..1
+- market_risk: LOW, NORMAL, HIGH, or UNKNOWN
+- rationale: concise explanation of the broad pre-market environment
+
+Use SPY and QQQ as broad-market context. Use the notable movers only to judge
+whether the session looks unusually directional or volatile.
+PREMARKET CONTEXT:
+{json.dumps(context, separators=(",", ":"), default=str)}
+""".strip()
+
+        try:
+            response = self._build_lightweight_gemini().invoke(prompt)
+            parsed = self._parse_json_object(self._response_text(response), "PREMARKET")
+            bias = str(parsed.get("market_bias", "NEUTRAL")).upper()
+            if bias not in {"BULLISH", "BEARISH", "NEUTRAL"}:
+                bias = "NEUTRAL"
+            risk = str(parsed.get("market_risk", "UNKNOWN")).upper()
+            if risk not in {"LOW", "NORMAL", "HIGH", "UNKNOWN"}:
+                risk = "UNKNOWN"
+            confidence = self._optional_float(parsed.get("confidence"))
+            return {
+                "market_bias": bias,
+                "confidence": max(0.0, min(1.0, confidence or 0.0)),
+                "market_risk": risk,
+                "rationale": str(parsed.get("rationale") or "Premarket context analyzed.").strip(),
+                "provider": "google_genai-lightweight",
+            }
+        except Exception as exc:
+            if not self._is_provider_failure(exc):
+                print(f"PREMARKET AI: fallback ({exc})")
+            return {
+                "market_bias": "NEUTRAL",
+                "confidence": 0.0,
+                "market_risk": "UNKNOWN",
+                "rationale": f"Premarket AI unavailable; deterministic context retained. {exc}",
+                "provider": "deterministic-fallback",
+            }
+
     @staticmethod
     def _is_provider_failure(exc: Exception) -> bool:
         message = str(exc).lower()
