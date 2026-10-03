@@ -36,12 +36,13 @@ class PremarketContext:
     spy: Mapping[str, Any]
     qqq: Mapping[str, Any]
     notable_symbols: tuple[PremarketSymbolContext, ...]
+    symbol_contexts: tuple[PremarketSymbolContext, ...]
     ai_rationale: str
     ai_provider: str
 
     def for_symbol(self, symbol: str) -> dict[str, Any]:
         normalized = symbol.strip().upper()
-        match = next((item for item in self.notable_symbols if item.symbol == normalized), None)
+        match = next((item for item in self.symbol_contexts if item.symbol == normalized), None)
         return {
             "generated_at": self.generated_at.isoformat(),
             "market_bias": self.market_bias,
