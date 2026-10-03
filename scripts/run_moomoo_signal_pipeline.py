@@ -41,6 +41,9 @@ class GraphRunner:
                 result[key] = value
         return result
 
+    def analyze_premarket(self, context: dict) -> dict:
+        return self.runtime.analyze_premarket(context)
+
     def cancel(self, symbol: str) -> None:
         """Mark a timed-out symbol so a late graph return cannot trigger sizing."""
         self.runtime.cancel(symbol)
