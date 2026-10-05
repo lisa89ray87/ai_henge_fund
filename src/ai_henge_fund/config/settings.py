@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import AliasChoices, Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -59,7 +59,10 @@ class AppSettings(BaseSettings):
     ai_henge_fund_max_positions: int = 0  # 0 = no fixed count limit
     ai_henge_fund_max_daily_loss: float = 10.0
     # Strategy-quality controls for the paper experiment.
-    ai_henge_fund_risk_profile: Literal["standard", "aggressive_paper"] = "standard"
+    ai_henge_fund_risk_profile: Literal["standard", "aggressive_paper"] = Field(
+        default="standard",
+        validation_alias=AliasChoices("ai_henge_fund_risk_profile", "AI_HEDGE_FUND_RISK_PROFILE"),
+    )
     ai_henge_fund_min_reward_risk: float = 2.0
     ai_henge_fund_force_flat_minutes_before_close: int = 10
     ai_henge_fund_overnight_allowed: bool = False
@@ -117,3 +120,4 @@ class AppSettings(BaseSettings):
 def get_settings() -> AppSettings:
     """Return the process-wide cached application settings instance."""
     return AppSettings()
+

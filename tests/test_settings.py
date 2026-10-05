@@ -86,3 +86,12 @@ def test_invalid_debug_environment_value_is_rejected(monkeypatch: pytest.MonkeyP
 def test_moomoo_read_only_cannot_be_disabled() -> None:
     with pytest.raises(ValidationError, match="Moomoo must remain read-only"):
         AppSettings(_env_file=None, app_env="test", moomoo_read_only=False)
+
+
+
+@pytest.mark.parametrize("variable", ["AI_HEDGE_FUND_RISK_PROFILE", "AI_HENGE_FUND_RISK_PROFILE"])
+def test_risk_profile_accepts_both_environment_names(monkeypatch, variable):
+    monkeypatch.delenv("AI_HEDGE_FUND_RISK_PROFILE", raising=False)
+    monkeypatch.delenv("AI_HENGE_FUND_RISK_PROFILE", raising=False)
+    monkeypatch.setenv(variable, "aggressive_paper")
+    assert AppSettings(_env_file=None, app_env="test").ai_henge_fund_risk_profile == "aggressive_paper"

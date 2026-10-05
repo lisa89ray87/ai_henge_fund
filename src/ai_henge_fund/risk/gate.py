@@ -98,6 +98,56 @@ class RiskGate:
             raise ValueError("AI SHORT levels must satisfy target < entry < stop")
         return entry, stop, target
 
+    def structural_stop_boundary(self, snapshot: SignalSnapshot, expected: str, entry: float) -> float | None:
+        """Use the same unrounded structural boundary for prompting and validation."""
+        recent = [c for c in snapshot.candles[-5:] if c.get("high") is not None and c.get("low") is not None]
+        atr = self._constraint_atr(snapshot)
+        if not recent or atr is None or atr <= 0:
+            return None
+        buffer = 0.05 if self.risk_profile == "aggressive_paper" and self.paper_mode else 0.10
+        if expected == "BUY":
+            return min(min(float(c["low"]) for c in recent), entry - atr * buffer)
+        return max(max(float(c["high"]) for c in recent), entry + atr * buffer)
+
+    def effective_reward_risk(self, snapshot: SignalSnapshot, signal: DeterministicSignal, expected: str) -> float:
+        regime = str(snapshot.metadata.get("market_regime", "UNKNOWN")).upper()
+        favorable = (regime == "RISK_ON" and expected == "BUY") or (regime == "RISK_OFF" and expected == "SELL")
+        if self.risk_profile == "aggressive_paper" and self.paper_mode and abs(signal.score) >= 7 and favorable:
+            return 1.75
+        return self.reward_risk_multiple
+
+    def trade_constraints(self, snapshot: SignalSnapshot, signal: DeterministicSignal) -> dict:
+        expected = {"LONG": "BUY", "SHORT": "SELL"}.get(signal.direction)
+        if expected is None or snapshot.last_price is None:
+            return {}
+        entry = float(snapshot.last_price)
+        try:
+            boundary = self.structural_stop_boundary(snapshot, expected, entry)
+            recent = [c for c in snapshot.candles[-5:] if c.get("high") is not None and c.get("low") is not None]
+            swing = (min(float(c["low"]) for c in recent) if expected == "BUY" else max(float(c["high"]) for c in recent)) if recent else None
+        except (TypeError, ValueError):
+            boundary = None
+            swing = None
+        return {
+            "direction": expected,
+            "reference_entry_price": entry,
+            "structural_stop_boundary": boundary,
+            "swing_price": swing,
+            "stop_comparison": "stop_price <= boundary" if expected == "BUY" else "stop_price >= boundary",
+            "minimum_reward_risk": self.effective_reward_risk(snapshot, signal, expected),
+            "atr_buffer_multiple": 0.05 if self.risk_profile == "aggressive_paper" and self.paper_mode else 0.10,
+            "entry_boundary_rule": "BUY boundary=min(swing_price, entry_price-atr*atr_buffer_multiple); SELL boundary=max(swing_price, entry_price+atr*atr_buffer_multiple)",
+            "atr": self._constraint_atr(snapshot),
+        }
+
+    @staticmethod
+    def _constraint_atr(snapshot: SignalSnapshot) -> float | None:
+        candles = [c for c in snapshot.candles[-14:] if c.get("high") is not None and c.get("low") is not None]
+        try:
+            return sum(float(c["high"]) - float(c["low"]) for c in candles) / len(candles) if candles else None
+        except (TypeError, ValueError):
+            return None
+
     def evaluate(
         self,
         snapshot: SignalSnapshot,
@@ -173,42 +223,25 @@ class RiskGate:
 
         # Reject stops that sit inside recent structure. A small ATR buffer
         # avoids treating a single candle wick as a sufficient invalidation level.
-        candle_ohlc = [c for c in snapshot.candles[-14:] if c.get("high") is not None and c.get("low") is not None]
-        if candle_ohlc:
-            try:
-                atr = sum(float(c["high"]) - float(c["low"]) for c in candle_ohlc) / len(candle_ohlc)
-                recent_ohlc = [c for c in snapshot.candles[-5:] if c.get("high") is not None and c.get("low") is not None]
-                if recent_ohlc and atr > 0:
-                    if expected == "BUY":
-                        swing_low = min(float(c["low"]) for c in recent_ohlc)
-                        buffer_multiple = 0.05 if self.risk_profile == "aggressive_paper" and self.paper_mode else 0.10
-                        structural_limit = min(swing_low, entry - (atr * buffer_multiple))
-                        if stop > structural_limit:
-                            return RiskDecision("WAIT", 0, risk_per_share,
-                                f"LONG stop ${stop:.4f} is inside recent structure/ATR buffer ${structural_limit:.4f}",
-                                tuple(checks + ["STRUCTURAL_STOP_REJECT"]),
-                                entry_price=entry, stop_price=stop, target_price=target)
-                    else:
-                        swing_high = max(float(c["high"]) for c in recent_ohlc)
-                        buffer_multiple = 0.05 if self.risk_profile == "aggressive_paper" and self.paper_mode else 0.10
-                        structural_limit = max(swing_high, entry + (atr * buffer_multiple))
-                        if stop < structural_limit:
-                            return RiskDecision("WAIT", 0, risk_per_share,
-                                f"SHORT stop ${stop:.4f} is inside recent structure/ATR buffer ${structural_limit:.4f}",
-                                tuple(checks + ["STRUCTURAL_STOP_REJECT"]),
-                                entry_price=entry, stop_price=stop, target_price=target)
-                    checks.append("STRUCTURAL_STOP")
-            except (TypeError, ValueError):
-                checks.append("STRUCTURAL_STOP_SKIPPED")
+        try:
+            structural_limit = self.structural_stop_boundary(snapshot, expected, entry)
+            if structural_limit is not None:
+                invalid_stop = stop > structural_limit if expected == "BUY" else stop < structural_limit
+                if invalid_stop:
+                    side = "LONG" if expected == "BUY" else "SHORT"
+                    return RiskDecision("WAIT", 0, risk_per_share,
+                        f"{side} stop ${stop:.4f} is inside recent structure/ATR buffer ${structural_limit:.4f}",
+                        tuple(checks + ["STRUCTURAL_STOP_REJECT"]),
+                        entry_price=entry, stop_price=stop, target_price=target)
+                checks.append("STRUCTURAL_STOP")
+        except (TypeError, ValueError):
+            checks.append("STRUCTURAL_STOP_SKIPPED")
 
         reward_per_share = abs(target - entry)
         reward_risk = reward_per_share / risk_per_share if risk_per_share > 0 else 0.0
-        effective_reward_risk = self.reward_risk_multiple
-        if self.risk_profile == "aggressive_paper" and self.paper_mode:
-            favorable_regime = (regime == "RISK_ON" and expected == "BUY") or (regime == "RISK_OFF" and expected == "SELL")
-            if abs(signal.score) >= 7 and favorable_regime:
-                effective_reward_risk = 1.75
-                checks.append("ADAPTIVE_REWARD_RISK_1_75")
+        effective_reward_risk = self.effective_reward_risk(snapshot, signal, expected)
+        if self.risk_profile == "aggressive_paper" and self.paper_mode and abs(signal.score) >= 7 and ((regime == "RISK_ON" and expected == "BUY") or (regime == "RISK_OFF" and expected == "SELL")):
+            checks.append("ADAPTIVE_REWARD_RISK_1_75")
         if reward_risk < effective_reward_risk:
             return RiskDecision(
                 "WAIT", 0, risk_per_share,
@@ -291,3 +324,4 @@ class RiskGate:
             stop_price=stop,
             target_price=target,
         )
+

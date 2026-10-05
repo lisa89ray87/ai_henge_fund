@@ -30,6 +30,7 @@ class TradingAgentsAdapter:
 
     def __init__(self, runner: TradingAgentsRunner | None = None) -> None:
         self.runner = runner
+        self.constraint_provider = None
 
     @staticmethod
     def _optional_float(result: dict[str, Any], *keys: str) -> float | None:
@@ -51,7 +52,14 @@ class TradingAgentsAdapter:
         risk_feedback: str | None = None,
         previous_levels: tuple[float, float, float] | None = None,
     ) -> dict[str, Any]:
+        if self.constraint_provider is None:
+            # Local import avoids the RiskGate/AITradeDecision import cycle.
+            from ai_henge_fund.risk.gate import RiskGate
+            constraints = RiskGate().trade_constraints(snapshot, signal)
+        else:
+            constraints = self.constraint_provider(snapshot, signal)
         payload = {
+            "trade_constraints": constraints,
             "symbol": snapshot.symbol,
             "market": snapshot.to_dict(),
             "deterministic_signal": {
@@ -209,3 +217,4 @@ class TradingAgentsAdapter:
         )
         decision = self._decision_from_result(snapshot, self.runner.analyze(payload))
         return self._ensure_ai_sizing(payload, decision)
+

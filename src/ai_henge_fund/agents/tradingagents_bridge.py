@@ -261,7 +261,22 @@ Return ONLY one valid JSON object with:
 
 For BUY require stop < entry < target. For SELL require target < entry < stop.
 Paper mode intentionally does not use account-capital limits for sizing. Choose a
-reasonable whole-share quantity from setup conviction and signal quality.
+reasonable whole-share quantity from setup conviction, signal quality, and the
+FINAL stop distance. First choose a stop satisfying trade_constraints.stop_comparison.
+If you change entry, recompute the boundary using entry_boundary_rule and supplied ATR.
+Round BUY stops down and SELL stops up so rounding cannot move them inside the boundary.
+Then compute risk=abs(entry-stop). BUY target must be >= entry+minimum_reward_risk*risk;
+SELL target must be <= entry-minimum_reward_risk*risk. Round targets outward.
+Only choose a target supported by the supplied evidence; return WAIT if it is unrealistic.
+Never tighten a structural stop to manufacture a better reward/risk ratio.
+For a revision, address the rejection and previous levels explicitly, then recalculate
+stop, target, and quantity together. All revised levels will be checked by the same gate.
+
+TRADE CONSTRAINTS:
+{json.dumps(request.get("trade_constraints") or {}, separators=(",", ":"), default=str)}
+
+REVISION CONTEXT:
+{json.dumps({key: request.get(key) for key in ("task", "risk_feedback", "previous_trade_levels")}, separators=(",", ":"), default=str)}
 
 DETERMINISTIC SIGNAL:
 {json.dumps(signal, separators=(",", ":"), default=str)}
@@ -444,3 +459,4 @@ PREMARKET CONTEXT:
             quantity=1 if action in {"BUY", "SELL"} else None,
             quantity_source="deterministic-fallback" if action in {"BUY", "SELL"} else None,
         )
+

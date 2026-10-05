@@ -40,6 +40,8 @@ class TradingPipeline:
         self.signal_engine = signal_engine or DeterministicSignalEngine()
         self.ai_adapter = ai_adapter or TradingAgentsAdapter()
         self.risk_gate = risk_gate or RiskGate()
+        if isinstance(self.ai_adapter, TradingAgentsAdapter):
+            self.ai_adapter.constraint_provider = self.risk_gate.trade_constraints
         self.positions = positions or PositionManager()
         self.telegram = telegram or TelegramNotifier(telegram_config_from_env())
         self._lifecycle = None
@@ -279,3 +281,4 @@ class TradingPipeline:
         if execute_paper:
             return self.execute_paper_result(snapshot, result)
         return result
+
