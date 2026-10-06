@@ -242,7 +242,7 @@ def _flatten_before_close(market_data, pipeline) -> int:
     return closed
 
 
-def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size):
+def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts):
     """Scan the universe in quota-safe batches.
 
     OpenD subscriptions persist on the quote context. Each symbol needs both a
@@ -254,6 +254,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
     market_data.close()
     market_data = build_moomoo_opend_market_data()
     snapshots = []
+    scanned = {}
     cycle_market_state = None
     total = len(universe)
 
@@ -300,6 +301,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                     },
                 )
                 signal = signal_engine.evaluate(snapshot)
+                scanned[symbol] = (snapshot, signal)
                 print(f"SCAN {symbol}: {signal.direction} score={signal.score} state={signal.setup_state}")
                 if snapshot.is_usable and signal.direction in {"LONG", "SHORT"}:
                     snapshots.append((snapshot, signal))
@@ -314,6 +316,47 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             print(f"SUBSCRIPTION BATCH {batch_number}/{batch_count}: complete; resetting OpenD quote context before next batch")
             market_data.close()
             market_data = build_moomoo_opend_market_data()
+
+    # Open positions are monitored independently of top-N entry ranking. Require
+    # repeated strong deterministic evidence in the opposite direction before
+    # closing, so one noisy 5-minute candle cannot force an exit.
+    strategy_settings = get_settings()
+    reversal_score = strategy_settings.ai_henge_fund_reversal_exit_score
+    reversal_confirmations = strategy_settings.ai_henge_fund_reversal_exit_confirmations
+    open_symbols = {position.symbol for position in pipeline.positions.all()}
+    for tracked_symbol in list(reversal_counts):
+        if tracked_symbol not in open_symbols:
+            reversal_counts.pop(tracked_symbol, None)
+    for position in list(pipeline.positions.all()):
+        observed = scanned.get(position.symbol)
+        if observed is None:
+            continue
+        snapshot, signal = observed
+        opposite = (
+            position.quantity > 0 and signal.direction == "SHORT" and signal.setup_state == "CANDIDATE" and signal.score <= -reversal_score
+        ) or (
+            position.quantity < 0 and signal.direction == "LONG" and signal.setup_state == "CANDIDATE" and signal.score >= reversal_score
+        )
+        if not opposite:
+            if reversal_counts.get(position.symbol):
+                print(f"REVERSAL {position.symbol}: reset; opposing thesis not confirmed this cycle")
+            reversal_counts[position.symbol] = 0
+            continue
+        reversal_counts[position.symbol] = reversal_counts.get(position.symbol, 0) + 1
+        print(
+            f"REVERSAL {position.symbol}: opposing {signal.direction} score={signal.score}; "
+            f"confirmation {reversal_counts[position.symbol]}/{reversal_confirmations}"
+        )
+        if execute_paper and reversal_counts[position.symbol] >= reversal_confirmations:
+            close_result = pipeline._ensure_lifecycle().close_position(
+                symbol=position.symbol,
+                price=float(snapshot.last_price),
+                market=True,
+                reason="THESIS_REVERSAL",
+            )
+            print(f"REVERSAL EXIT {position.symbol}: {close_result.action} ({close_result.reason})")
+            if close_result.action in {"CLOSE", "PARTIAL_CLOSE"}:
+                reversal_counts.pop(position.symbol, None)
 
     snapshots.sort(key=lambda item: abs(item[1].score), reverse=True)
     candidates = snapshots[:max_ai_candidates]
@@ -424,6 +467,7 @@ def main() -> int:
     pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(GraphRunner()))
     signal_engine = DeterministicSignalEngine()
     paper_trades = 0
+    reversal_counts = {}
     session_resumed = False
     premarket_context = None
     premarket_done = False
@@ -432,7 +476,7 @@ def main() -> int:
             now = _session_now()
             if not session_loop:
                 pipeline.resume_paper_session()
-                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size)
+                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts)
                 pipeline.handoff_paper_session()
                 break
             if now.weekday() >= 5:
@@ -481,7 +525,7 @@ def main() -> int:
             if paper_trades >= max_paper_trades:
                 print("Paper-trade session limit reached; continuing market monitoring without new orders.")
             else:
-                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size)
+                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts)
             now = _session_now()
             force_flat_minutes = get_settings().ai_henge_fund_force_flat_minutes_before_close
             if now >= (_session_close(now) - __import__("datetime").timedelta(minutes=force_flat_minutes)):
