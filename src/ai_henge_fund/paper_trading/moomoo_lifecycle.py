@@ -263,7 +263,7 @@ class MoomooPaperTradeLifecycle:
             entry_price=fill_price, stop_price=stop_price, target_price=target_price,
         )
 
-    def close_position(self, *, symbol, price, market: bool = False):
+    def close_position(self, *, symbol, price, market: bool = False, reason: str = "CLOSE"):
         symbol = symbol.strip().upper()
         position = self.positions.get(symbol)
         if position is None:
@@ -313,12 +313,12 @@ class MoomooPaperTradeLifecycle:
             metadata={"broker": "moomoo", "trading_environment": "SIMULATE", "broker_order_id": order.order_id, "broker_status": status.status},
         )
         filled = min(float(status.filled_quantity), quantity)
-        self._record_exit(symbol, trade, fill_price, order.order_id, "CLOSE")
+        self._record_exit(symbol, trade, fill_price, order.order_id, reason)
         remaining = self._reduce_after_exit(symbol, filled)
         if remaining is None:
             self._target_orders.pop(symbol, None)
             self._state.mark_closed(symbol)
-            self._notify(trade, "MOOMOO_PAPER_CLOSE_FILL")
+            self._notify(trade, "MOOMOO_PAPER_THESIS_REVERSAL_FILL" if reason == "THESIS_REVERSAL" else "MOOMOO_PAPER_CLOSE_FILL")
             return MoomooLifecycleResult("CLOSE", trade, "Moomoo paper close order fully filled", broker_order_id=order.order_id, broker_status=status.status)
 
         new_target = self._restore_target_after_partial(symbol, remaining)

@@ -66,6 +66,11 @@ class AppSettings(BaseSettings):
     ai_henge_fund_min_reward_risk: float = 2.0
     ai_henge_fund_force_flat_minutes_before_close: int = 10
     ai_henge_fund_overnight_allowed: bool = False
+    # Paper-only guardrails: keep aggressive entry discovery while bounding per-trade loss
+    # and requiring repeated deterministic evidence before a thesis-reversal exit.
+    ai_henge_fund_paper_max_risk_per_trade: float = 300.0
+    ai_henge_fund_reversal_exit_score: int = 5
+    ai_henge_fund_reversal_exit_confirmations: int = 2
 
     # Streamlit
     streamlit_server_port: int = 8501
@@ -110,6 +115,12 @@ class AppSettings(BaseSettings):
             raise ValueError("AI_HEDGE_FUND_MAX_POSITIONS must be zero or greater.")
         if self.ai_henge_fund_max_daily_loss <= 0:
             raise ValueError("AI_HEDGE_FUND_MAX_DAILY_LOSS must be greater than zero.")
+        if self.ai_henge_fund_paper_max_risk_per_trade <= 0:
+            raise ValueError("AI_HENGE_FUND_PAPER_MAX_RISK_PER_TRADE must be greater than zero.")
+        if self.ai_henge_fund_reversal_exit_score < 1:
+            raise ValueError("AI_HENGE_FUND_REVERSAL_EXIT_SCORE must be at least 1.")
+        if self.ai_henge_fund_reversal_exit_confirmations < 1:
+            raise ValueError("AI_HENGE_FUND_REVERSAL_EXIT_CONFIRMATIONS must be at least 1.")
         if self.ai_henge_fund_risk_profile == "aggressive_paper" and self.moomoo_live_trading_enabled:
             raise ValueError("AI_HEDGE_FUND_RISK_PROFILE=aggressive_paper cannot be used with live trading.")
 
