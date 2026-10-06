@@ -51,6 +51,7 @@ class RiskGate:
         self.max_position_value = min(max_position_value, settings.ai_henge_fund_max_capital_deployed)
         self.starting_capital = settings.ai_henge_fund_starting_capital
         self.risk_per_trade_pct = settings.ai_henge_fund_risk_per_trade_pct
+        self.paper_max_risk_per_trade = settings.ai_henge_fund_paper_max_risk_per_trade
         self.max_daily_loss = settings.ai_henge_fund_max_daily_loss
         self.max_positions = settings.ai_henge_fund_max_positions
         self.risk_profile = settings.ai_henge_fund_risk_profile
@@ -269,14 +270,23 @@ class RiskGate:
         checks.append("AI_POSITION_SIZE")
 
         if self.paper_mode:
-            # Simulation is for strategy/execution testing. Do not constrain it
-            # using the future live account's $100/$90/$10 capital budgets.
-            checks.append("PAPER_CAPITAL_LIMITS_BYPASSED")
+            # Keep paper execution independent of future live capital budgets, but
+            # cap the planned stop-loss exposure of any one simulated trade. Gemini
+            # still chooses size; this guard only scales an oversized request down.
+            max_risk_quantity = max(1, int(self.paper_max_risk_per_trade // risk_per_share))
+            paper_quantity = min(ai_quantity, max_risk_quantity)
+            if paper_quantity < ai_quantity:
+                checks.append("PAPER_AI_SIZE_CAPPED")
+            checks.extend(["PAPER_RISK_LIMIT", "PAPER_CAPITAL_LIMITS_BYPASSED"])
             return RiskDecision(
                 expected,
-                float(ai_quantity),
+                float(paper_quantity),
                 risk_per_share,
-                "Paper trade accepted using AI position size; live capital limits bypassed",
+                (
+                    f"Paper trade accepted using AI position size capped to {paper_quantity} shares "
+                    f"for <= ${self.paper_max_risk_per_trade:.2f} planned stop risk; "
+                    "live capital limits bypassed"
+                ),
                 tuple(checks),
                 entry_price=entry, stop_price=stop, target_price=target,
             )
