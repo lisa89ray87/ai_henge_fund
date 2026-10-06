@@ -379,7 +379,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             if result is None:
                 print(f"AI/PIPELINE {snapshot.symbol}: SKIP (no result)")
                 continue
-            if execute_paper and result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
+            if execute_paper and paper_trades < max_paper_trades and result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
                 result = pipeline.execute_paper_result(snapshot, result)
         except Exception as exc:
             decision_stats["ERROR"] += 1
@@ -523,9 +523,8 @@ def main() -> int:
 
             print(f"\nSESSION CYCLE {now:%Y-%m-%d %H:%M:%S %Z}")
             if paper_trades >= max_paper_trades:
-                print("Paper-trade session limit reached; continuing market monitoring without new orders.")
-            else:
-                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts)
+                print("Paper-trade session limit reached; new entries disabled, open-position reversal monitoring remains active.")
+            paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts)
             now = _session_now()
             force_flat_minutes = get_settings().ai_henge_fund_force_flat_minutes_before_close
             if now >= (_session_close(now) - __import__("datetime").timedelta(minutes=force_flat_minutes)):
