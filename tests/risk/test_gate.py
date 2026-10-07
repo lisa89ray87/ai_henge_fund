@@ -70,7 +70,7 @@ def test_aggressive_paper_profile_lowers_confidence_threshold(monkeypatch):
     get_settings.cache_clear()
     try:
         gate = RiskGate()
-        assert gate.min_ai_confidence == 0.65
+        assert gate.min_ai_confidence == 0.70
         assert gate.risk_profile == "aggressive_paper"
     finally:
         get_settings.cache_clear()
