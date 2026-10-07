@@ -27,7 +27,7 @@ def test_pipeline_opens_paper_position_only_after_all_gates():
     snapshot = SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
         market_state="REGULAR",
-        candles=tuple({"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6} for i in range(20)),
+        candles=tuple({"open": 99 + i * 0.6, "close": 100 + i * 0.6, "low": 98.8 + i * 0.6, "high": 100.1 + i * 0.6, "volume": 1000 + i * 100} for i in range(20)),
         data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_ON"},
     )
     pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(Runner()))
@@ -124,7 +124,7 @@ def test_pipeline_does_not_open_when_ai_disagrees():
 
     snapshot = SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
-        market_state="REGULAR", candles=tuple({"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6} for i in range(20)),
+        market_state="REGULAR", candles=tuple({"open": 99 + i * 0.6, "close": 100 + i * 0.6, "low": 98.8 + i * 0.6, "high": 100.1 + i * 0.6, "volume": 1000 + i * 100} for i in range(20)),
         data_source="test", data_quality="LIVE",
     )
     result = TradingPipeline(ai_adapter=TradingAgentsAdapter(BearishRunner())).evaluate(snapshot)
@@ -148,7 +148,7 @@ def test_pipeline_rejects_paper_trade_with_low_ai_confidence():
     snapshot = SignalSnapshot(
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
         market_state="REGULAR",
-        candles=tuple({"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6} for i in range(20)),
+        candles=tuple({"open": 99 + i * 0.6, "close": 100 + i * 0.6, "low": 98.8 + i * 0.6, "high": 100.1 + i * 0.6, "volume": 1000 + i * 100} for i in range(20)),
         data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_ON"},
     )
     result = TradingPipeline(ai_adapter=TradingAgentsAdapter(LowConfidenceRunner())).evaluate(
@@ -192,7 +192,7 @@ def test_pipeline_retries_once_after_structural_stop_rejection():
         symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
         market_state="REGULAR",
         candles=tuple(
-            {"close": 100 + i * 0.6, "low": 99 + i * 0.6, "high": 101 + i * 0.6}
+            {"open": 99 + i * 0.6, "close": 100 + i * 0.6, "low": 98.8 + i * 0.6, "high": 100.1 + i * 0.6, "volume": 1000 + i * 100}
             for i in range(20)
         ),
         data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_ON"},
