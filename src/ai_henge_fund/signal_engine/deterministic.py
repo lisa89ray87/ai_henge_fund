@@ -171,13 +171,17 @@ class DeterministicSignalEngine:
             elif volume_ratio >= 0.80:
                 volume_confirmation = 0
 
+        # Session state is a tradability/quality attribute, not directional evidence.
+        # Previously every active session added +1, which biased LONG scores upward
+        # and made otherwise equivalent SHORT setups harder to qualify.
         market_alignment = 0
         market_state = (snapshot.market_state or "").upper()
-        if market_state and "END" not in market_state:
-            market_alignment = 1
 
         score = trend + momentum + price_action + volume_confirmation + market_alignment
-        direction = "LONG" if score >= 5 else "SHORT" if score <= -5 else "NEUTRAL"
+        # Quality-first paper validation: require stronger multi-factor agreement.
+        # This remains active enough for the broad universe while filtering marginal
+        # +/-5 setups that were disproportionately reaching the AI/risk stages.
+        direction = "LONG" if score >= 6 else "SHORT" if score <= -6 else "NEUTRAL"
         setup_state = "CANDIDATE" if direction != "NEUTRAL" else "WAIT"
 
         reasons = [
