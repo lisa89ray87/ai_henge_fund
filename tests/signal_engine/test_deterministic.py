@@ -33,7 +33,7 @@ def test_upward_sequence_creates_long_candidate():
     )
     assert signal.direction == "LONG"
     assert signal.setup_state == "CANDIDATE"
-    assert signal.score >= 5
+    assert signal.score >= 6
     assert signal.technical_context["sma20"] > 0
     assert signal.technical_context["rsi14"] is not None
 
