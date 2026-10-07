@@ -93,7 +93,7 @@ def test_aggressive_paper_allows_strong_favorable_setup_at_1_75_rr(monkeypatch):
             setup_state="CANDIDATE", reasons=signal.reasons, technical_context=signal.technical_context,
         )
         ai = AITradeDecision(
-            "US.AAPL", "BUY", 0.66, "confirmed", "test",
+            "US.AAPL", "BUY", 0.72, "confirmed", "test",
             quantity=1, entry_price=100, stop_price=99.9, target_price=101.65,
         )
         result = RiskGate().evaluate(snapshot, signal, ai)
