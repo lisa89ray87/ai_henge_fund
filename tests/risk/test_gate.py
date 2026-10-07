@@ -12,9 +12,20 @@ def make_snapshot():
     )
 
 
+def make_long_candidate(snapshot, score=7):
+    signal = DeterministicSignalEngine().evaluate(snapshot)
+    return signal.__class__(
+        symbol=signal.symbol, direction="LONG", score=score,
+        trend=signal.trend, momentum=signal.momentum,
+        price_action=signal.price_action, volume_confirmation=signal.volume_confirmation,
+        market_alignment=signal.market_alignment, risk_reward=signal.risk_reward,
+        setup_state="CANDIDATE", reasons=signal.reasons, technical_context=signal.technical_context,
+    )
+
+
 def test_risk_gate_accepts_confirmed_candidate():
     snapshot = make_snapshot()
-    signal = DeterministicSignalEngine().evaluate(snapshot)
+    signal = make_long_candidate(snapshot)
     ai = AITradeDecision("US.AAPL", "BUY", 0.85, "confirmed", "test", quantity=1, entry_price=100, stop_price=99, target_price=102)
     result = RiskGate().evaluate(snapshot, signal, ai)
     assert result.action == "BUY"
@@ -24,7 +35,7 @@ def test_risk_gate_accepts_confirmed_candidate():
 
 def test_risk_gate_fails_on_low_ai_confidence():
     snapshot = make_snapshot()
-    signal = DeterministicSignalEngine().evaluate(snapshot)
+    signal = make_long_candidate(snapshot)
     ai = AITradeDecision("US.AAPL", "BUY", 0.50, "weak", "test")
     result = RiskGate().evaluate(snapshot, signal, ai)
     assert result.action == "WAIT"
@@ -37,7 +48,7 @@ def test_risk_gate_rejects_closed_market_state():
         market_state="AFTER_HOURS_END", candles=tuple({"close": 100 + i * 0.3, "low": 99 + i * 0.3, "high": 101 + i * 0.3} for i in range(20)),
         data_source="test", data_quality="LIVE", metadata={"market_regime": "RISK_OFF"},
     )
-    signal = DeterministicSignalEngine().evaluate(snapshot)
+    signal = make_long_candidate(snapshot)
     ai = AITradeDecision("US.AAPL", "BUY", 0.90, "confirmed", "test")
     result = RiskGate().evaluate(snapshot, signal, ai)
     assert result.action == "WAIT"
@@ -50,7 +61,7 @@ def test_risk_gate_allows_candidate_when_market_regime_is_unknown():
         candles=tuple({"close": 100 + i * 0.3, "low": 99 + i * 0.3, "high": 101 + i * 0.3} for i in range(20)),
         data_source="test", data_quality="LIVE", metadata={"market_regime": "UNKNOWN"},
     )
-    signal = DeterministicSignalEngine().evaluate(snapshot)
+    signal = make_long_candidate(snapshot)
     ai = AITradeDecision(
         "US.AAPL", "BUY", 0.85, "confirmed", "test",
         quantity=1, entry_price=100, stop_price=99, target_price=102,
@@ -84,14 +95,7 @@ def test_aggressive_paper_allows_strong_favorable_setup_at_1_75_rr(monkeypatch):
     get_settings.cache_clear()
     try:
         snapshot = make_snapshot()
-        signal = DeterministicSignalEngine().evaluate(snapshot)
-        signal = signal.__class__(
-            symbol=signal.symbol, direction="LONG", score=7,
-            trend=signal.trend, momentum=signal.momentum,
-            price_action=signal.price_action, volume_confirmation=signal.volume_confirmation,
-            market_alignment=signal.market_alignment, risk_reward=signal.risk_reward,
-            setup_state="CANDIDATE", reasons=signal.reasons, technical_context=signal.technical_context,
-        )
+        signal = make_long_candidate(snapshot, score=7)
         ai = AITradeDecision(
             "US.AAPL", "BUY", 0.72, "confirmed", "test",
             quantity=1, entry_price=100, stop_price=99.9, target_price=101.65,
