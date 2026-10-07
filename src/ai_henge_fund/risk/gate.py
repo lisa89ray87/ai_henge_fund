@@ -56,7 +56,7 @@ class RiskGate:
         self.max_positions = settings.ai_henge_fund_max_positions
         self.risk_profile = settings.ai_henge_fund_risk_profile
         self.paper_mode = bool(settings.moomoo_paper_trading_enabled and not settings.moomoo_live_trading_enabled)
-        self.min_ai_confidence = 0.65 if self.risk_profile == "aggressive_paper" and self.paper_mode else min_ai_confidence
+        self.min_ai_confidence = 0.70 if self.risk_profile == "aggressive_paper" and self.paper_mode else min_ai_confidence
         self.allowed_market_states = frozenset(allowed_market_states)
         self.reward_risk_multiple = reward_risk_multiple
         self.paper_mode = bool(settings.moomoo_paper_trading_enabled and not settings.moomoo_live_trading_enabled)
