@@ -42,3 +42,22 @@ def test_insufficient_data_fails_closed():
     signal = DeterministicSignalEngine().evaluate(snapshot([100]))
     assert signal.direction == "NEUTRAL"
     assert signal.setup_state == "DATA_INSUFFICIENT"
+
+
+def test_atr_includes_previous_close_gap():
+    from ai_henge_fund.signal_engine.deterministic import DeterministicSignalEngine
+
+    candles = [
+        {"high": 101.0, "low": 99.0, "close": 100.0},
+        {"high": 111.0, "low": 109.0, "close": 110.0},
+    ]
+    # Second true range is max(2, 11, 9) = 11, not just high-low = 2.
+    assert DeterministicSignalEngine._atr(candles, period=1) == 11.0
+
+
+def test_atr_without_previous_close_uses_high_low():
+    from ai_henge_fund.signal_engine.deterministic import DeterministicSignalEngine
+
+    assert DeterministicSignalEngine._atr(
+        [{"high": 105.0, "low": 100.0, "close": 103.0}], period=14
+    ) == 5.0
