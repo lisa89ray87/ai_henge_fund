@@ -70,6 +70,7 @@ class AppSettings(BaseSettings):
     # and requiring repeated deterministic evidence before a thesis-reversal exit.
     ai_henge_fund_paper_max_risk_per_trade: float = 300.0
     ai_henge_fund_paper_max_gross_exposure: float = 100000.0
+    ai_henge_fund_paper_max_daily_realized_loss: float = 1000.0
     ai_henge_fund_reversal_exit_score: int = 5
     ai_henge_fund_reversal_exit_confirmations: int = 2
 
@@ -116,6 +117,8 @@ class AppSettings(BaseSettings):
             raise ValueError("AI_HEDGE_FUND_MAX_POSITIONS must be zero or greater.")
         if self.ai_henge_fund_max_daily_loss <= 0:
             raise ValueError("AI_HEDGE_FUND_MAX_DAILY_LOSS must be greater than zero.")
+        if self.ai_henge_fund_paper_max_daily_realized_loss <= 0:
+            raise ValueError("AI_HENGE_FUND_PAPER_MAX_DAILY_REALIZED_LOSS must be greater than zero.")
         if self.ai_henge_fund_paper_max_gross_exposure <= 0:
             raise ValueError("AI_HENGE_FUND_PAPER_MAX_GROSS_EXPOSURE must be greater than zero.")
         if self.ai_henge_fund_paper_max_risk_per_trade <= 0:
