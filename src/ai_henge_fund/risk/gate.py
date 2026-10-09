@@ -53,6 +53,7 @@ class RiskGate:
         self.risk_per_trade_pct = settings.ai_henge_fund_risk_per_trade_pct
         self.paper_max_risk_per_trade = settings.ai_henge_fund_paper_max_risk_per_trade
         self.paper_max_gross_exposure = settings.ai_henge_fund_paper_max_gross_exposure
+        self.paper_max_daily_realized_loss = settings.ai_henge_fund_paper_max_daily_realized_loss
         self.max_daily_loss = settings.ai_henge_fund_max_daily_loss
         self.max_positions = settings.ai_henge_fund_max_positions
         self.risk_profile = settings.ai_henge_fund_risk_profile
@@ -157,7 +158,7 @@ class RiskGate:
         ai: AITradeDecision,
         *,
         deployed_capital: float = 0.0,
-        daily_realized_loss: float = 0.0,
+        daily_realized_loss: float | None = None,
         open_position_count: int = 0,
     ) -> RiskDecision:
         checks: list[str] = []
@@ -271,6 +272,17 @@ class RiskGate:
         checks.append("AI_POSITION_SIZE")
 
         if self.paper_mode:
+            if daily_realized_loss is None:
+                return RiskDecision("WAIT", 0, risk_per_share,
+                    "Paper daily realized loss unavailable",
+                    tuple(checks + ["PAPER_DAILY_LOSS_UNAVAILABLE"]),
+                    entry_price=entry, stop_price=stop, target_price=target)
+            if daily_realized_loss >= self.paper_max_daily_realized_loss:
+                return RiskDecision("WAIT", 0, risk_per_share,
+                    "Paper daily realized loss limit reached",
+                    tuple(checks + ["PAPER_DAILY_LOSS_REJECT"]),
+                    entry_price=entry, stop_price=stop, target_price=target)
+            checks.append("PAPER_DAILY_LOSS")
             # Keep paper execution independent of future live capital budgets, but
             # cap the planned stop-loss exposure of any one simulated trade. Gemini
             # still chooses size; this guard only scales an oversized request down.
@@ -310,7 +322,7 @@ class RiskGate:
             )
 
         # Live-only capital/risk controls.
-        if daily_realized_loss >= self.max_daily_loss:
+        if daily_realized_loss is not None and daily_realized_loss >= self.max_daily_loss:
             return RiskDecision("WAIT", 0, None, "Maximum daily loss limit reached", tuple(checks))
         checks.append("DAILY_LOSS")
 
@@ -320,7 +332,7 @@ class RiskGate:
         checks.append("DEPLOYED_CAPITAL")
 
         configured_trade_risk = self.starting_capital * self.risk_per_trade_pct / 100.0
-        remaining_daily_loss = max(0.0, self.max_daily_loss - max(0.0, daily_realized_loss))
+        remaining_daily_loss = max(0.0, self.max_daily_loss - max(0.0, daily_realized_loss or 0.0))
         allowed_trade_risk = min(configured_trade_risk, remaining_daily_loss)
         if allowed_trade_risk <= 0:
             return RiskDecision("WAIT", 0, None, "No daily risk budget remains", tuple(checks))

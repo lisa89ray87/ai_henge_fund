@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
+from zoneinfo import ZoneInfo
 
 from sqlalchemy import text
 
@@ -73,6 +74,27 @@ class TradeJournal:
             int(exit_id), trade_id, quantity, exit_price, reason.upper(),
             broker_exit_order_id, when, pnl,
         )
+
+    def realized_loss_today_et(self, now: datetime | None = None) -> float:
+        """Net realized paper loss for the current New York trading calendar date.
+
+        Positive net realized P/L does not count as a loss. Database errors
+        propagate so callers can fail closed rather than silently assume zero.
+        """
+        instant = now or datetime.now(timezone.utc)
+        if instant.tzinfo is None:
+            raise ValueError("now must be timezone-aware")
+        eastern = ZoneInfo("America/New_York")
+        day = instant.astimezone(eastern).date()
+        start = datetime.combine(day, datetime.min.time(), tzinfo=eastern)
+        end = datetime.combine(day + timedelta(days=1), datetime.min.time(), tzinfo=eastern)
+        with session_scope() as session:
+            pnl = session.execute(text("""
+                SELECT COALESCE(SUM(realized_pnl), 0)
+                FROM paper_trade_exit_events
+                WHERE exited_at >= :start AND exited_at < :end
+            """), {"start": start, "end": end}).scalar_one()
+        return max(0.0, -float(pnl))
 
     def exits_for_trade(self, trade_id: str) -> list[TradeExitEvent]:
         with session_scope() as session:

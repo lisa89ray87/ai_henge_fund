@@ -27,7 +27,7 @@ def test_risk_gate_accepts_confirmed_candidate():
     snapshot = make_snapshot()
     signal = make_long_candidate(snapshot)
     ai = AITradeDecision("US.AAPL", "BUY", 0.85, "confirmed", "test", quantity=1, entry_price=100, stop_price=99, target_price=102)
-    result = RiskGate().evaluate(snapshot, signal, ai)
+    result = RiskGate().evaluate(snapshot, signal, ai, daily_realized_loss=0)
     assert result.action == "BUY"
     assert result.quantity == 1
     assert "AI_CONFIDENCE" in result.checks
@@ -37,7 +37,7 @@ def test_risk_gate_fails_on_low_ai_confidence():
     snapshot = make_snapshot()
     signal = make_long_candidate(snapshot)
     ai = AITradeDecision("US.AAPL", "BUY", 0.50, "weak", "test")
-    result = RiskGate().evaluate(snapshot, signal, ai)
+    result = RiskGate().evaluate(snapshot, signal, ai, daily_realized_loss=0)
     assert result.action == "WAIT"
     assert result.quantity == 0
 
@@ -50,7 +50,7 @@ def test_risk_gate_rejects_closed_market_state():
     )
     signal = make_long_candidate(snapshot)
     ai = AITradeDecision("US.AAPL", "BUY", 0.90, "confirmed", "test")
-    result = RiskGate().evaluate(snapshot, signal, ai)
+    result = RiskGate().evaluate(snapshot, signal, ai, daily_realized_loss=0)
     assert result.action == "WAIT"
 
 
@@ -66,7 +66,7 @@ def test_risk_gate_allows_candidate_when_market_regime_is_unknown():
         "US.AAPL", "BUY", 0.85, "confirmed", "test",
         quantity=1, entry_price=100, stop_price=99, target_price=102,
     )
-    result = RiskGate().evaluate(snapshot, signal, ai)
+    result = RiskGate().evaluate(snapshot, signal, ai, daily_realized_loss=0)
     assert result.action == "BUY"
     assert "MARKET_REGIME_UNKNOWN" in result.checks
     assert "Broad-market regime is unavailable" not in result.reason
@@ -100,7 +100,7 @@ def test_aggressive_paper_allows_strong_favorable_setup_at_1_75_rr(monkeypatch):
             "US.AAPL", "BUY", 0.72, "confirmed", "test",
             quantity=1, entry_price=100, stop_price=99.9, target_price=101.65,
         )
-        result = RiskGate().evaluate(snapshot, signal, ai)
+        result = RiskGate().evaluate(snapshot, signal, ai, daily_realized_loss=0)
         assert result.action == "BUY"
         assert "RISK_PROFILE_AGGRESSIVE_PAPER" in result.checks
         assert "ADAPTIVE_REWARD_RISK_1_75" in result.checks
@@ -121,7 +121,7 @@ def test_paper_rejects_single_share_exceeding_stop_risk_cap(monkeypatch):
             "US.AAPL", "BUY", 0.85, "confirmed", "test",
             quantity=1, entry_price=100, stop_price=99, target_price=102,
         )
-        result = RiskGate().evaluate(snapshot, signal, ai)
+        result = RiskGate().evaluate(snapshot, signal, ai, daily_realized_loss=0)
         assert result.action == "WAIT"
         assert result.quantity == 0
         assert "PAPER_RISK_LIMIT_REJECT" in result.checks
@@ -140,12 +140,35 @@ def test_paper_gross_exposure_caps_quantity(monkeypatch):
         signal = make_long_candidate(snapshot)
         ai = AITradeDecision("US.AAPL", "BUY", 0.85, "confirmed", "test",
                              quantity=10, entry_price=100, stop_price=99, target_price=102)
-        result = RiskGate().evaluate(snapshot, signal, ai, deployed_capital=100)
+        result = RiskGate().evaluate(snapshot, signal, ai, deployed_capital=100, daily_realized_loss=0)
         assert result.action == "BUY"
         assert result.quantity == 1
         assert "PAPER_GROSS_EXPOSURE" in result.checks
-        blocked = RiskGate().evaluate(snapshot, signal, ai, deployed_capital=200)
+        blocked = RiskGate().evaluate(snapshot, signal, ai, deployed_capital=200, daily_realized_loss=0)
         assert blocked.action == "WAIT"
         assert "PAPER_GROSS_EXPOSURE_REJECT" in blocked.checks
+    finally:
+        get_settings.cache_clear()
+
+
+def test_paper_daily_loss_blocks_new_entries(monkeypatch):
+    monkeypatch.setenv("MOOMOO_PAPER_TRADING_ENABLED", "true")
+    monkeypatch.setenv("MOOMOO_LIVE_TRADING_ENABLED", "false")
+    monkeypatch.setenv("AI_HENGE_FUND_PAPER_MAX_DAILY_REALIZED_LOSS", "100")
+    from ai_henge_fund.config.settings import get_settings
+    get_settings.cache_clear()
+    try:
+        snapshot = make_snapshot()
+        signal = make_long_candidate(snapshot)
+        ai = AITradeDecision("US.AAPL", "BUY", 0.85, "confirmed", "test",
+                             quantity=1, entry_price=100, stop_price=99, target_price=102)
+        gate = RiskGate()
+        assert gate.evaluate(snapshot, signal, ai, daily_realized_loss=99).action == "BUY"
+        blocked = gate.evaluate(snapshot, signal, ai, daily_realized_loss=100)
+        assert blocked.action == "WAIT"
+        assert "PAPER_DAILY_LOSS_REJECT" in blocked.checks
+        unavailable = gate.evaluate(snapshot, signal, ai, daily_realized_loss=None)
+        assert unavailable.action == "WAIT"
+        assert "PAPER_DAILY_LOSS_UNAVAILABLE" in unavailable.checks
     finally:
         get_settings.cache_clear()
