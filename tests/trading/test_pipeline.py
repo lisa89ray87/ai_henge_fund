@@ -199,6 +199,8 @@ def test_pipeline_retries_once_after_structural_stop_rejection():
     )
     runner = RevisionRunner()
     pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(runner))
+    # Isolate the revision behavior from the external Neon journal.
+    pipeline._paper_daily_loss = lambda: 0.0
     result = pipeline.evaluate(snapshot, execute_paper=False)
 
     assert runner.calls == 2
