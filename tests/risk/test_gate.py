@@ -127,3 +127,25 @@ def test_paper_rejects_single_share_exceeding_stop_risk_cap(monkeypatch):
         assert "PAPER_RISK_LIMIT_REJECT" in result.checks
     finally:
         get_settings.cache_clear()
+
+
+def test_paper_gross_exposure_caps_quantity(monkeypatch):
+    monkeypatch.setenv("MOOMOO_PAPER_TRADING_ENABLED", "true")
+    monkeypatch.setenv("MOOMOO_LIVE_TRADING_ENABLED", "false")
+    monkeypatch.setenv("AI_HENGE_FUND_PAPER_MAX_GROSS_EXPOSURE", "250")
+    from ai_henge_fund.config.settings import get_settings
+    get_settings.cache_clear()
+    try:
+        snapshot = make_snapshot()
+        signal = make_long_candidate(snapshot)
+        ai = AITradeDecision("US.AAPL", "BUY", 0.85, "confirmed", "test",
+                             quantity=10, entry_price=100, stop_price=99, target_price=102)
+        result = RiskGate().evaluate(snapshot, signal, ai, deployed_capital=100)
+        assert result.action == "BUY"
+        assert result.quantity == 1
+        assert "PAPER_GROSS_EXPOSURE" in result.checks
+        blocked = RiskGate().evaluate(snapshot, signal, ai, deployed_capital=200)
+        assert blocked.action == "WAIT"
+        assert "PAPER_GROSS_EXPOSURE_REJECT" in blocked.checks
+    finally:
+        get_settings.cache_clear()
