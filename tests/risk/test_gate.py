@@ -106,3 +106,24 @@ def test_aggressive_paper_allows_strong_favorable_setup_at_1_75_rr(monkeypatch):
         assert "ADAPTIVE_REWARD_RISK_1_75" in result.checks
     finally:
         get_settings.cache_clear()
+
+
+def test_paper_rejects_single_share_exceeding_stop_risk_cap(monkeypatch):
+    monkeypatch.setenv("MOOMOO_PAPER_TRADING_ENABLED", "true")
+    monkeypatch.setenv("MOOMOO_LIVE_TRADING_ENABLED", "false")
+    monkeypatch.setenv("AI_HENGE_FUND_PAPER_MAX_RISK_PER_TRADE", "0.50")
+    from ai_henge_fund.config.settings import get_settings
+    get_settings.cache_clear()
+    try:
+        snapshot = make_snapshot()
+        signal = make_long_candidate(snapshot)
+        ai = AITradeDecision(
+            "US.AAPL", "BUY", 0.85, "confirmed", "test",
+            quantity=1, entry_price=100, stop_price=99, target_price=102,
+        )
+        result = RiskGate().evaluate(snapshot, signal, ai)
+        assert result.action == "WAIT"
+        assert result.quantity == 0
+        assert "PAPER_RISK_LIMIT_REJECT" in result.checks
+    finally:
+        get_settings.cache_clear()
