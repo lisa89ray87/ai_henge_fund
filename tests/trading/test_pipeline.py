@@ -108,6 +108,7 @@ def test_pipeline_opens_paper_position_only_after_all_gates():
             return MoomooLifecycleResult("OPEN", trade, "Moomoo paper order fully filled", broker_order_id="12345", broker_status="FILLED")
 
     pipeline._lifecycle = LifecycleProxy()
+    pipeline._paper_daily_loss = lambda: 0.0
 
     result = pipeline.evaluate(snapshot)
 
@@ -207,3 +208,23 @@ def test_pipeline_retries_once_after_structural_stop_rejection():
     assert result.risk.action == "BUY"
     assert result.risk.stop_price == 99.0
     assert "AI_RISK_REVISION" in result.risk.checks
+
+
+def test_execution_rechecks_daily_loss_without_submitting_order():
+    from ai_henge_fund.risk.gate import RiskDecision
+    from ai_henge_fund.trading.pipeline import PipelineResult
+
+    snapshot = SignalSnapshot(
+        symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
+        market_state="REGULAR", candles=(), data_source="test",
+        data_quality="LIVE", metadata={},
+    )
+    pipeline = TradingPipeline()
+    pipeline._paper_daily_loss = lambda: pipeline.risk_gate.paper_max_daily_realized_loss
+    approved = RiskDecision("BUY", 1, 1, "approved", ("PAPER_DAILY_LOSS",),
+                            entry_price=100, stop_price=99, target_price=102)
+    result = PipelineResult("LONG", "BUY", approved, None)
+    blocked = pipeline.execute_paper_result(snapshot, result)
+    assert blocked.risk.action == "WAIT"
+    assert "PAPER_DAILY_LOSS_REJECT" in blocked.risk.checks
+    assert blocked.lifecycle is None
