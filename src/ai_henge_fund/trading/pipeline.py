@@ -8,6 +8,7 @@ from ai_henge_fund.config.telegram import telegram_config_from_env
 from ai_henge_fund.execution.moomoo_order_monitor import MoomooPaperOrderMonitor
 from ai_henge_fund.execution.moomoo_paper import MoomooPaperExecution
 from ai_henge_fund.market_data.signal_snapshot import SignalSnapshot
+from ai_henge_fund.paper_trading.trade_journal import TradeJournal
 from ai_henge_fund.paper_trading.moomoo_lifecycle import MoomooLifecycleResult, MoomooPaperTradeLifecycle
 from ai_henge_fund.portfolio.manager import PositionManager
 from ai_henge_fund.risk.gate import RiskDecision, RiskGate
@@ -45,6 +46,18 @@ class TradingPipeline:
         self.positions = positions or PositionManager()
         self.telegram = telegram or TelegramNotifier(telegram_config_from_env())
         self._lifecycle = None
+        self._daily_loss_journal = None
+
+    def _paper_daily_loss(self) -> float | None:
+        if not self.risk_gate.paper_mode:
+            return None
+        try:
+            if self._daily_loss_journal is None:
+                self._daily_loss_journal = TradeJournal()
+            return self._daily_loss_journal.realized_loss_today_et()
+        except Exception as exc:
+            print(f"PAPER DAILY LOSS UNAVAILABLE: {type(exc).__name__}: {exc}")
+            return None
 
     def _ensure_lifecycle(self):
         if self._lifecycle is None:
@@ -205,11 +218,13 @@ class TradingPipeline:
     def analyze(self, snapshot: SignalSnapshot) -> PipelineResult:
         signal = self.signal_engine.evaluate(snapshot)
         ai = self.ai_adapter.analyze(snapshot, signal)
+        daily_loss = self._paper_daily_loss()
         risk = self.risk_gate.evaluate(
             snapshot,
             signal,
             ai,
             deployed_capital=self._deployed_capital(),
+            daily_realized_loss=daily_loss,
             open_position_count=len(self.positions.all()),
         )
 
