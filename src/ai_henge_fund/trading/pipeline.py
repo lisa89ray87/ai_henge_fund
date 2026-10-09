@@ -263,6 +263,36 @@ class TradingPipeline:
         if result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
             existing = self.positions.get(snapshot.symbol)
             if existing is None:
+                # Recheck immediately before an opening order: another fill or
+                # journal exit may have changed limits since signal analysis.
+                daily_loss = self._paper_daily_loss()
+                checks = result.risk.checks
+                reason = None
+                marker = None
+                if daily_loss is None:
+                    reason, marker = "Paper daily realized loss unavailable at execution", "PAPER_DAILY_LOSS_UNAVAILABLE"
+                elif daily_loss >= self.risk_gate.paper_max_daily_realized_loss:
+                    reason, marker = "Paper daily realized loss limit reached at execution", "PAPER_DAILY_LOSS_REJECT"
+                elif len(self.positions.all()) >= self.risk_gate.max_positions > 0:
+                    reason, marker = "Maximum simultaneous position limit reached at execution", "POSITION_COUNT_REJECT"
+                elif (self._deployed_capital() + result.risk.quantity * (result.risk.entry_price or float(snapshot.last_price))
+                      > self.risk_gate.paper_max_gross_exposure):
+                    reason, marker = "Paper gross exposure limit reached at execution", "PAPER_GROSS_EXPOSURE_REJECT"
+                if reason is not None:
+                    blocked = RiskDecision("WAIT", 0, result.risk.risk_per_share, reason,
+                                           tuple(checks) + (marker,),
+                                           entry_price=result.risk.entry_price,
+                                           stop_price=result.risk.stop_price,
+                                           target_price=result.risk.target_price)
+                    return PipelineResult(
+                        result.deterministic_direction, result.ai_decision, blocked, None,
+                        ai_provider=result.ai_provider, ai_confidence=result.ai_confidence,
+                        quantity_source=result.quantity_source, ai_rationale=result.ai_rationale,
+                        deterministic_score=result.deterministic_score, trend=result.trend,
+                        momentum=result.momentum, price_action=result.price_action,
+                        volume_confirmation=result.volume_confirmation,
+                        market_alignment=result.market_alignment,
+                    )
                 lifecycle = self._ensure_lifecycle().open(
                     symbol=snapshot.symbol,
                     side=result.risk.action,
