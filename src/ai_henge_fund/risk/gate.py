@@ -52,6 +52,7 @@ class RiskGate:
         self.starting_capital = settings.ai_henge_fund_starting_capital
         self.risk_per_trade_pct = settings.ai_henge_fund_risk_per_trade_pct
         self.paper_max_risk_per_trade = settings.ai_henge_fund_paper_max_risk_per_trade
+        self.paper_max_gross_exposure = settings.ai_henge_fund_paper_max_gross_exposure
         self.max_daily_loss = settings.ai_henge_fund_max_daily_loss
         self.max_positions = settings.ai_henge_fund_max_positions
         self.risk_profile = settings.ai_henge_fund_risk_profile
@@ -281,7 +282,17 @@ class RiskGate:
                     tuple(checks + ["PAPER_RISK_LIMIT_REJECT"]),
                     entry_price=entry, stop_price=stop, target_price=target,
                 )
-            paper_quantity = min(ai_quantity, max_risk_quantity)
+            available_gross = self.paper_max_gross_exposure - max(0.0, deployed_capital)
+            if available_gross < entry:
+                return RiskDecision(
+                    "WAIT", 0, risk_per_share,
+                    "Paper portfolio gross exposure limit reached",
+                    tuple(checks + ["PAPER_GROSS_EXPOSURE_REJECT"]),
+                    entry_price=entry, stop_price=stop, target_price=target,
+                )
+            max_exposure_quantity = int(available_gross // entry)
+            paper_quantity = min(ai_quantity, max_risk_quantity, max_exposure_quantity)
+            checks.append("PAPER_GROSS_EXPOSURE")
             if paper_quantity < ai_quantity:
                 checks.append("PAPER_AI_SIZE_CAPPED")
             checks.extend(["PAPER_RISK_LIMIT", "PAPER_CAPITAL_LIMITS_BYPASSED"])
