@@ -273,7 +273,14 @@ class RiskGate:
             # Keep paper execution independent of future live capital budgets, but
             # cap the planned stop-loss exposure of any one simulated trade. Gemini
             # still chooses size; this guard only scales an oversized request down.
-            max_risk_quantity = max(1, int(self.paper_max_risk_per_trade // risk_per_share))
+            max_risk_quantity = int(self.paper_max_risk_per_trade // risk_per_share)
+            if max_risk_quantity < 1:
+                return RiskDecision(
+                    "WAIT", 0, risk_per_share,
+                    "One share exceeds the maximum planned paper-trade stop risk",
+                    tuple(checks + ["PAPER_RISK_LIMIT_REJECT"]),
+                    entry_price=entry, stop_price=stop, target_price=target,
+                )
             paper_quantity = min(ai_quantity, max_risk_quantity)
             if paper_quantity < ai_quantity:
                 checks.append("PAPER_AI_SIZE_CAPPED")
