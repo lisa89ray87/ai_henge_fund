@@ -1,0 +1,27 @@
+name: Paper Daily Loss Read-Only Check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 10
+    env:
+      DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+      MOOMOO_PAPER_TRADING_ENABLED: "true"
+      MOOMOO_LIVE_TRADING_ENABLED: "false"
+      PYTHON_ENV: production
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve Python 3.12
+        shell: powershell
+        run: '& "$env:GITHUB_WORKSPACE\scripts\resolve_python312.ps1"'
+      - name: Verify existing Neon journal read-only
+        shell: powershell
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:DATABASE_URL)) { throw "NEON_DATABASE_URL missing" }
+          & $env:PYTHON_312_PATH -m pip install --disable-pip-version-check -e .
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & $env:PYTHON_312_PATH scripts/check_paper_daily_loss_readonly.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
