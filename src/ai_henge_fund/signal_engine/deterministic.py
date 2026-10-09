@@ -50,12 +50,22 @@ class DeterministicSignalEngine:
 
     @staticmethod
     def _atr(candles: list[dict[str, Any]], period: int = 14) -> float | None:
+        # True range includes gaps from the previous close; high-low alone
+        # understates volatility when a stock gaps between candles.
         ranges: list[float] = []
-        for candle in candles[-period:]:
+        start = max(0, len(candles) - period)
+        for index in range(start, len(candles)):
+            candle = candles[index]
             try:
                 high = float(candle["high"])
                 low = float(candle["low"])
-                ranges.append(max(0.0, high - low))
+                if high < low:
+                    continue
+                previous_close = (
+                    float(candles[index - 1]["close"]) if index > 0 else None
+                )
+                true_range = max(high - low, abs(high - previous_close), abs(low - previous_close)) if previous_close is not None else high - low
+                ranges.append(true_range)
             except (KeyError, TypeError, ValueError):
                 continue
         return sum(ranges) / len(ranges) if ranges else None
