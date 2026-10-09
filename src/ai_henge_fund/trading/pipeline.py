@@ -238,6 +238,7 @@ class TradingPipeline:
                 signal,
                 revised_ai,
                 deployed_capital=self._deployed_capital(),
+                daily_realized_loss=daily_loss,
                 open_position_count=len(self.positions.all()),
             )
             ai = revised_ai
