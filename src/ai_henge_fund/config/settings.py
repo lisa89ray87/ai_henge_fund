@@ -69,6 +69,7 @@ class AppSettings(BaseSettings):
     # Paper-only guardrails: keep aggressive entry discovery while bounding per-trade loss
     # and requiring repeated deterministic evidence before a thesis-reversal exit.
     ai_henge_fund_paper_max_risk_per_trade: float = 300.0
+    ai_henge_fund_paper_max_combined_stop_risk: float = 600.0
     ai_henge_fund_paper_max_gross_exposure: float = 100000.0
     ai_henge_fund_paper_max_daily_realized_loss: float = 1000.0
     ai_henge_fund_reversal_exit_score: int = 5
