@@ -258,6 +258,18 @@ class TradingPipeline:
             market_alignment=signal.market_alignment,
         )
 
+    def _combined_paper_stop_risk(self) -> float | None:
+        """Sum planned stop risk of open long and short positions."""
+        total = 0.0
+        for position in self.positions.all():
+            if position.stop_price is None:
+                return None
+            per_share = (position.average_price - position.stop_price) if position.quantity > 0 else (position.stop_price - position.average_price)
+            if per_share <= 0:
+                return None
+            total += abs(position.quantity) * per_share
+        return total
+
     def execute_paper_result(self, snapshot: SignalSnapshot, result: PipelineResult) -> PipelineResult:
         lifecycle = None
         if result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
@@ -278,6 +290,15 @@ class TradingPipeline:
                 elif (self._deployed_capital() + result.risk.quantity * (result.risk.entry_price or float(snapshot.last_price))
                       > self.risk_gate.paper_max_gross_exposure):
                     reason, marker = "Paper gross exposure limit reached at execution", "PAPER_GROSS_EXPOSURE_REJECT"
+                elif self.risk_gate.paper_mode:
+                    current_stop_risk = self._combined_paper_stop_risk()
+                    new_stop_risk = (result.risk.quantity * result.risk.risk_per_share
+                                     if result.risk.risk_per_share is not None else None)
+                    combined_limit = get_settings().ai_henge_fund_paper_max_combined_stop_risk
+                    if current_stop_risk is None or new_stop_risk is None or new_stop_risk <= 0:
+                        reason, marker = "Combined paper stop risk unavailable", "PAPER_COMBINED_RISK_UNAVAILABLE"
+                    elif current_stop_risk + new_stop_risk > combined_limit + 1e-8:
+                        reason, marker = "Combined paper stop risk limit exceeded", "PAPER_COMBINED_RISK_REJECT"
                 if reason is not None:
                     blocked = RiskDecision("WAIT", 0, result.risk.risk_per_share, reason,
                                            tuple(checks) + (marker,),
