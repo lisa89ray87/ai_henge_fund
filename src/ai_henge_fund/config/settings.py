@@ -124,6 +124,8 @@ class AppSettings(BaseSettings):
             raise ValueError("AI_HENGE_FUND_PAPER_MAX_GROSS_EXPOSURE must be greater than zero.")
         if self.ai_henge_fund_paper_max_risk_per_trade <= 0:
             raise ValueError("AI_HENGE_FUND_PAPER_MAX_RISK_PER_TRADE must be greater than zero.")
+        if self.ai_henge_fund_paper_max_combined_stop_risk <= 0:
+            raise ValueError("AI_HENGE_FUND_PAPER_MAX_COMBINED_STOP_RISK must be greater than zero.")
         if self.ai_henge_fund_reversal_exit_score < 1:
             raise ValueError("AI_HENGE_FUND_REVERSAL_EXIT_SCORE must be at least 1.")
         if self.ai_henge_fund_reversal_exit_confirmations < 1:
