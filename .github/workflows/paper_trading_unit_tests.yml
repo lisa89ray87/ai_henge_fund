@@ -34,3 +34,11 @@ jobs:
         shell: powershell
         run: |
           & $env:PYTHON_312_PATH -m pytest tests\paper_trading\test_trade_journal_v2.py tests\paper_trading\test_moomoo_lifecycle_journal.py tests\paper_trading\test_partial_position.py tests\risk\test_gate.py tests\market_data\test_market_regime.py tests\trading\test_pipeline.py tests\trading\test_combined_paper_stop_risk.py tests\tradingagents\test_adapter.py -q
+
+      - name: Third-party API connectivity (non-trading)
+        shell: powershell
+        env:
+          THIRD_PARTY_API_KEY: ${{ secrets.THIRD_PARTY_API_KEY }}
+        run: |
+          & $env:PYTHON_312_PATH scripts\\probe_third_party_api.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
