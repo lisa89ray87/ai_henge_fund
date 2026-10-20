@@ -91,16 +91,19 @@ def main() -> int:
             "rate_limit",
             "resource_exhausted",
             "503",
+            "504",
+            "deadline_exceeded",
+            "deadline exceeded",
+            "deadline expired",
+            "gateway timeout",
             "service unavailable",
             "temporarily unavailable",
             "high demand",
             "overloaded",
         )
         is_transient = any(marker in lowered for marker in transient_markers)
-        print(
-            "GEMINI PROBE: WARN " if is_transient else "GEMINI PROBE: FAIL "
-            + f"type={type(exc).__name__} message={message[:1000]!r}"
-        )
+        status = "WARN" if is_transient else "FAIL"
+        print(f"GEMINI PROBE: {status} type={type(exc).__name__} message={message[:1000]!r}")
         if is_transient:
             print("AI PROVIDER DIAGNOSTICS: WARN (Gemini temporarily unavailable; runtime fallback remains enabled)")
             return 0
