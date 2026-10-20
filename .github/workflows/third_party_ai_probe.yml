@@ -1,0 +1,22 @@
+name: Third-party AI connectivity (no trading)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: [self-hosted, Windows, X64]
+    timeout-minutes: 5
+    env:
+      THIRD_PARTY_API_KEY: ${{ secrets.THIRD_PARTY_API_KEY }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Resolve Python 3.12
+        shell: powershell
+        run: '& "$env:GITHUB_WORKSPACE\\scripts\\resolve_python312.ps1"'
+      - name: Third-party Responses smoke test
+        shell: powershell
+        run: |
+          & $env:PYTHON_312_PATH scripts\\probe_third_party_api.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
