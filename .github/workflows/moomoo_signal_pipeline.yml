@@ -18,6 +18,10 @@ jobs:
       DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
       OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
       GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+      THIRD_PARTY_API_KEY: ${{ secrets.THIRD_PARTY_API_KEY }}
+      THIRD_PARTY_BASE_URL: "https://www.ainipy.com/api/desktop/v1"
+      THIRD_PARTY_MODEL: "gpt-5.6-sol"
+      THIRD_PARTY_TIMEOUT_SECONDS: "30"
       GOOGLE_API_KEY: ${{ secrets.GEMINI_API_KEY }}
       AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_BOT_TOKEN }}
       AI_HEDGE_FUND_TELEGRAM_CHAT_ID: ${{ secrets.AI_HEDGE_FUND_TELEGRAM_CHAT_ID }}
