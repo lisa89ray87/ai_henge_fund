@@ -11,6 +11,8 @@ from __future__ import annotations
 import json
 import os
 import threading
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Protocol
@@ -231,6 +233,14 @@ class TradingAgentsGraphRuntime:
     def _run_lightweight_gemini(self, request: dict[str, Any]) -> TradingAgentsDecision:
         symbol = self._normalize_symbol(str(request["symbol"]))
         self._raise_if_cancelled(symbol)
+        prompt = self._build_lightweight_prompt(request)
+        print(f"LIGHTWEIGHT GEMINI REQUEST {symbol}")
+        response = self._build_lightweight_gemini().invoke(prompt)
+        self._raise_if_cancelled(symbol)
+        return self._parse_lightweight_decision(self._response_text(response), symbol, "google_genai-lightweight")
+
+    def _build_lightweight_prompt(self, request: dict[str, Any]) -> str:
+        symbol = self._normalize_symbol(str(request["symbol"]))
         market = request.get("market") or {}
         signal = request.get("deterministic_signal") or {}
         candles = list(market.get("candles") or [])[-20:]
@@ -284,10 +294,10 @@ DETERMINISTIC SIGNAL:
 MOOMOO SNAPSHOT:
 {json.dumps(compact_market, separators=(",", ":"), default=str)}
 """.strip()
-        print(f"LIGHTWEIGHT GEMINI REQUEST {symbol}")
-        response = self._build_lightweight_gemini().invoke(prompt)
-        self._raise_if_cancelled(symbol)
-        parsed = self._parse_json_object(self._response_text(response), symbol)
+        return prompt
+
+    def _parse_lightweight_decision(self, text: str, symbol: str, provider: str) -> TradingAgentsDecision:
+        parsed = self._parse_json_object(text, symbol)
         action = str(parsed.get("decision", "WAIT")).strip().upper()
         if action not in {"BUY", "SELL", "WAIT"}:
             raise RuntimeError(f"Lightweight Gemini returned unsupported decision for {symbol}: {action!r}")
@@ -304,18 +314,64 @@ MOOMOO SNAPSHOT:
             raise RuntimeError(f"Lightweight Gemini returned invalid BUY levels for {symbol}")
         if action == "SELL" and not (entry and stop and target and target < entry < stop):
             raise RuntimeError(f"Lightweight Gemini returned invalid SELL levels for {symbol}")
-        print(f"LIGHTWEIGHT GEMINI RESULT {symbol}: decision={action} confidence={confidence} quantity={quantity}")
+        print(f"LIGHTWEIGHT AI RESULT {symbol}: provider={provider} decision={action} confidence={confidence} quantity={quantity}")
         return TradingAgentsDecision(
             action=action,
             confidence=confidence,
             rationale=str(parsed.get("rationale") or "Lightweight Gemini confirmation").strip(),
-            provider="google_genai-lightweight",
+            provider=provider,
             quantity=quantity,
             entry_price=entry,
             stop_price=stop,
             target_price=target,
-            quantity_source="ai-google_genai-lightweight" if quantity is not None else None,
+            quantity_source=f"ai-{provider}" if quantity is not None else None,
         )
+
+    def _run_third_party(self, request: dict[str, Any]) -> TradingAgentsDecision:
+        """Use a separate Responses-compatible service only after Gemini fails."""
+        symbol = self._normalize_symbol(str(request["symbol"]))
+        self._raise_if_cancelled(symbol)
+        key = os.getenv("THIRD_PARTY_API_KEY", "").strip()
+        if not key:
+            raise RuntimeError("Third-party API key not configured")
+        base = os.getenv("THIRD_PARTY_BASE_URL", "https://www.ainipy.com/api/desktop/v1").rstrip("/")
+        if base != "https://www.ainipy.com/api/desktop/v1":
+            raise RuntimeError("Unexpected third-party endpoint; refusing request")
+        # Reuse the exact Gemini prompt so the providers receive equivalent market data.
+        # Capture it without invoking Gemini by constructing it in the shared helper.
+        prompt = self._build_lightweight_prompt(request)
+        body = json.dumps({
+            "model": os.getenv("THIRD_PARTY_MODEL", "gpt-5.6-sol"),
+            "input": prompt,
+            "max_output_tokens": 1200,
+            "store": False,
+        }).encode("utf-8")
+        headers = {
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+            "X-OpenAI-Actor-Authorization": "b2-desktop-runtime-v1",
+        }
+        req = urllib.request.Request(base + "/responses", data=body, headers=headers, method="POST")
+        timeout = min(60.0, max(5.0, float(os.getenv("THIRD_PARTY_TIMEOUT_SECONDS", "30"))))
+        print(f"THIRD_PARTY AI REQUEST {symbol}")
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            payload = json.load(response)
+        self._raise_if_cancelled(symbol)
+        if not isinstance(payload, dict):
+            raise RuntimeError("Third-party API returned invalid response")
+        content = payload.get("output_text")
+        if not isinstance(content, str) or not content.strip():
+            fragments = []
+            for item in payload.get("output", []):
+                if not isinstance(item, dict):
+                    continue
+                for part in item.get("content", []):
+                    if isinstance(part, dict) and part.get("type") == "output_text":
+                        fragments.append(str(part.get("text", "")))
+            content = "".join(fragments)
+        if not content:
+            raise RuntimeError("Third-party API returned no output text")
+        return self._parse_lightweight_decision(content, symbol, "third-party-responses")
 
     def analyze_premarket(self, context: dict[str, Any]) -> dict[str, Any]:
         """Run exactly one compact AI call for the whole premarket context."""
@@ -427,10 +483,14 @@ PREMARKET CONTEXT:
             except Exception as exc:
                 if not self._is_provider_failure(exc):
                     raise
-                print(
-                    f"AI lightweight provider failed: provider=google_genai; "
-                    f"symbol={symbol}; reason={exc}; fallback=deterministic"
-                )
+                if self._has_key("THIRD_PARTY_API_KEY"):
+                    print(f"AI lightweight provider failed: provider=google_genai; symbol={symbol}; fallback=third-party")
+                    try:
+                        return self._run_third_party(request)
+                    except Exception as secondary_exc:
+                        print(f"Third-party AI unavailable for {symbol}: {type(secondary_exc).__name__}")
+                    return TradingAgentsDecision("WAIT", 0.0, "Both AI providers unavailable; no new paper entry.", "ai-unavailable")
+                print(f"AI lightweight provider failed: provider=google_genai; symbol={symbol}; fallback=deterministic")
                 return self._deterministic_fallback(request, str(exc))
         if self._primary_provider is None:
             return self._deterministic_fallback(request, "No configured AI provider")
