@@ -118,7 +118,13 @@ class MoomooPaperTradeLifecycle:
                 symbol = str(row["symbol"]).strip().upper()
                 local = self.positions.get(symbol)
                 if local is None:
-                    print(f"FORCE-FLAT {symbol}: broker position has no local state; refusing blind close")
+                    saved_state = self._state.get(symbol)
+                    state_status = "saved state exists" if saved_state is not None else "saved state missing"
+                    print(
+                        f"FORCE-FLAT {symbol}: broker position has no local state "
+                        f"({state_status}); refusing blind close. "
+                        "Inspect simulated broker positions and persisted trade state before retrying."
+                    )
                     continue
                 try:
                     quote_ret, quote_data = self._quote.get_market_snapshot([symbol])
