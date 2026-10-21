@@ -1,10 +1,10 @@
 """Guard against regression of the shared AI entry-quality prompt."""
 
-from ai_henge_fund.agents.tradingagents_bridge import TradingAgentsRuntime
+from ai_henge_fund.agents.tradingagents_bridge import TradingAgentsGraphRuntime
 
 
 def test_shared_prompt_requires_evidence_for_weak_volume_and_nearby_support():
-    runtime = TradingAgentsRuntime.__new__(TradingAgentsRuntime)
+    runtime = TradingAgentsGraphRuntime.__new__(TradingAgentsGraphRuntime)
     prompt = runtime._build_lightweight_prompt({
         "symbol": "US.RIVN",
         "market": {"last_price": 12.58, "candles": []},
@@ -16,7 +16,7 @@ def test_shared_prompt_requires_evidence_for_weak_volume_and_nearby_support():
 
 
 def test_shared_prompt_retains_trade_constraints():
-    runtime = TradingAgentsRuntime.__new__(TradingAgentsRuntime)
+    runtime = TradingAgentsGraphRuntime.__new__(TradingAgentsGraphRuntime)
     prompt = runtime._build_lightweight_prompt({
         "symbol": "US.TTD",
         "market": {"last_price": 12.51, "candles": []},
