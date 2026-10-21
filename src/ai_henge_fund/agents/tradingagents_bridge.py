@@ -279,6 +279,19 @@ Then compute risk=abs(entry-stop). BUY target must be >= entry+minimum_reward_ri
 SELL target must be <= entry-minimum_reward_risk*risk. Round targets outward.
 Only choose a target supported by the supplied evidence; return WAIT if it is unrealistic.
 Never tighten a structural stop to manufacture a better reward/risk ratio.
+ENTRY QUALITY CHECK (apply equally to Gemini and fallback providers):
+- Evaluate directional alignment with the supplied market regime and premarket context,
+  but treat premarket bias as context, not a permanent intraday direction.
+- Examine volume confirmation, proximity to nearby support/resistance, recent candle
+  reversals, and whether momentum is already extended. Do not assume missing evidence.
+- If volume confirmation is weak AND the entry is near opposing support/resistance,
+  return WAIT unless supplied candles show a credible breakout/breakdown with follow-through.
+- For SHORT entries near support, require evidence of a confirmed breakdown rather than
+  only a low RSI or negative SMA slope; apply the symmetric rule to LONGs near resistance.
+- If a weakness is identified but a trade is still confirmed, explicitly explain the
+  confirming evidence that outweighs it. Do not manufacture confidence from a score.
+- A mathematically valid stop and reward/risk ratio are necessary, not sufficient.
+  Return WAIT when entry quality is uncertain, even for a high deterministic score.
 For a revision, address the rejection and previous levels explicitly, then recalculate
 stop, target, and quantity together. All revised levels will be checked by the same gate.
 
