@@ -1,3 +1,5 @@
+import math
+
 from ai_henge_fund.signal_engine.deterministic import DeterministicSignalEngine
 from ai_henge_fund.agents.tradingagents_bridge import TradingAgentsGraphRuntime
 
@@ -39,3 +41,34 @@ def test_ai_prompt_explains_trigger_and_volume_limitations():
     assert "session-aware RVOL" in prompt
     assert "EMA9 retest" in prompt
     assert '"trigger":"BREAKOUT"' in prompt
+
+
+def test_nan_ohlc_rejected():
+    candles = _candles()
+    candles[-1]["low"] = math.nan
+    context = DeterministicSignalEngine._entry_trigger_context(candles, "LONG")
+    assert context["status"] == "UNAVAILABLE"
+    assert context["trigger"] == "NONE"
+
+
+def test_zero_volume_candle_still_allows_vwap():
+    candles = _candles()
+    candles[3]["volume"] = 0
+    context = DeterministicSignalEngine._entry_trigger_context(candles, "LONG")
+    assert context["vwap"] is not None
+
+
+def test_no_false_long_retest_from_updated_ema():
+    candles = [{"open": 100, "high": 100.2, "low": 99.8, "close": 100, "volume": 100}
+               for _ in range(19)]
+    candles.append({"open": 100.1, "high": 101.1, "low": 100.1, "close": 101, "volume": 100})
+    context = DeterministicSignalEngine._entry_trigger_context(candles, "LONG")
+    assert context["ema_retest"] is False
+
+
+def test_no_false_short_retest_from_updated_ema():
+    candles = [{"open": 100, "high": 100.2, "low": 99.8, "close": 100, "volume": 100}
+               for _ in range(19)]
+    candles.append({"open": 99.9, "high": 99.9, "low": 98.9, "close": 99, "volume": 100})
+    context = DeterministicSignalEngine._entry_trigger_context(candles, "SHORT")
+    assert context["ema_retest"] is False
