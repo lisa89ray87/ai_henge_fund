@@ -15,6 +15,7 @@ on:
       - "tests/trading/**"
       - "tests/tradingagents/**"
       - "tests/market_data/**"
+      - "tests/test_entry_trigger_context.py"
       - ".github/workflows/paper_trading_unit_tests.yml"
 
 jobs:
@@ -33,7 +34,7 @@ jobs:
       - name: Run trade journal, lifecycle, and position unit tests
         shell: powershell
         run: |
-          & $env:PYTHON_312_PATH -m pytest tests\paper_trading\test_trade_journal_v2.py tests\paper_trading\test_moomoo_lifecycle_journal.py tests\paper_trading\test_partial_position.py tests\risk\test_gate.py tests\market_data\test_market_regime.py tests\trading\test_pipeline.py tests\trading\test_combined_paper_stop_risk.py tests\tradingagents\test_adapter.py tests\test_third_party_fallback.py tests\paper_trading\test_unmatched_force_flat.py -q
+          & $env:PYTHON_312_PATH -m pytest tests\paper_trading\test_trade_journal_v2.py tests\paper_trading\test_moomoo_lifecycle_journal.py tests\paper_trading\test_partial_position.py tests\risk\test_gate.py tests\market_data\test_market_regime.py tests\trading\test_pipeline.py tests\trading\test_combined_paper_stop_risk.py tests\tradingagents\test_adapter.py tests\test_third_party_fallback.py tests\paper_trading\test_unmatched_force_flat.py tests\test_entry_trigger_context.py -q
 
       - name: Third-party API connectivity (non-trading)
         shell: powershell
