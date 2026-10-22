@@ -280,6 +280,17 @@ SELL target must be <= entry-minimum_reward_risk*risk. Round targets outward.
 Only choose a target supported by the supplied evidence; return WAIT if it is unrealistic.
 Never tighten a structural stop to manufacture a better reward/risk ratio.
 ENTRY QUALITY CHECK (apply equally to Gemini and fallback providers):
+- Read deterministic_signal.technical_context.entry_trigger as structured candle-interval
+  evidence: trigger type, EMA9 retest, ten-bar breakout/breakdown, rolling
+  candle VWAP and recent support/resistance. Distinguish confirmed triggers
+  from merely directional candidates. These are supporting observations, not
+  guaranteed fills or standalone permission to trade.
+- Rolling 20-candle VWAP is NOT full-session VWAP. The last-candle volume
+  ratio is NOT session-aware RVOL. Do not describe either as session RVOL,
+  and do not demand a fixed RVOL threshold from this unavailable metric.
+- A valid breakout/breakdown or EMA retest can justify a trade when other
+  evidence aligns, but missing trigger data must never be invented.
+  For no trigger, require explicit alternative price-action confirmation.
 - Evaluate directional alignment with the supplied market regime and premarket context,
   but treat premarket bias as context, not a permanent intraday direction.
 - Examine volume confirmation, proximity to nearby support/resistance, recent candle
