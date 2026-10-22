@@ -280,7 +280,7 @@ SELL target must be <= entry-minimum_reward_risk*risk. Round targets outward.
 Only choose a target supported by the supplied evidence; return WAIT if it is unrealistic.
 Never tighten a structural stop to manufacture a better reward/risk ratio.
 ENTRY QUALITY CHECK (apply equally to Gemini and fallback providers):
-- Read deterministic_signal.technical_context.entry_trigger as structured 5-minute
+- Read deterministic_signal.technical_context.entry_trigger as structured candle-interval
   evidence: trigger type, EMA9 retest, ten-bar breakout/breakdown, rolling
   candle VWAP and recent support/resistance. Distinguish confirmed triggers
   from merely directional candidates. These are supporting observations, not
