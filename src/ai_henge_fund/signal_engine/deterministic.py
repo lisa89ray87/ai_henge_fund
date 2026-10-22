@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 from typing import Any
 
 from ai_henge_fund.market_data.signal_snapshot import SignalSnapshot
@@ -79,7 +80,7 @@ class DeterministicSignalEngine:
 
     @classmethod
     def _entry_trigger_context(cls, candles: list[dict[str, Any]], direction: str) -> dict[str, Any]:
-        """Explainable 5-minute entry evidence; informational, not an order trigger.
+        """Explainable candle-interval entry evidence; not an order trigger.
 
         Candle-volume ratio is not session-aware RVOL. VWAP is unavailable when
         candles lack volume, and an opening range cannot be inferred reliably
@@ -105,17 +106,19 @@ class DeterministicSignalEngine:
             opens = [float(c["open"]) for c in recent]
         except (KeyError, ValueError, TypeError):
             return result
-        if any(h < l or l <= 0 for h, l in zip(highs, lows)):
+        if any(not all(math.isfinite(v) for v in row) for row in zip(highs, lows, closes, opens)) or any(h < l or l <= 0 or not l <= c <= h or not l <= o <= h for h, l, c, o in zip(highs, lows, closes, opens)):
             return result
         last = closes[-1]
         prior_high = max(highs[-11:-1])
         prior_low = min(lows[-11:-1])
         ema = closes[0]
         alpha = 2.0 / 10.0
-        for close in closes[1:]:
+        for close in closes[1:-1]:
             ema = alpha * close + (1 - alpha) * ema
+        prior_ema = ema
+        ema = alpha * closes[-1] + (1 - alpha) * prior_ema
         volumes = [cls._safe_float(c.get("volume")) for c in recent]
-        if all(v is not None and v > 0 for v in volumes):
+        if all(v is not None and math.isfinite(v) and v >= 0 for v in volumes) and sum(volumes) > 0:
             weighted = sum(((h + l + c) / 3) * v for h, l, c, v in zip(highs, lows, closes, volumes))
             vwap = weighted / sum(volumes)
             result["vwap"] = round(vwap, 4)
@@ -125,7 +128,7 @@ class DeterministicSignalEngine:
         breakout = last > prior_high and bullish
         breakdown = last < prior_low and bearish
         # A retest requires price to touch the EMA zone and close back in the trend direction.
-        retest = (lows[-1] <= ema <= last and bullish) if direction == "LONG" else (highs[-1] >= ema >= last and bearish)
+        retest = (lows[-1] <= prior_ema <= last and bullish) if direction == "LONG" else (highs[-1] >= prior_ema >= last and bearish)
         result.update({
             "status": "AVAILABLE",
             "ema9": round(ema, 4),
