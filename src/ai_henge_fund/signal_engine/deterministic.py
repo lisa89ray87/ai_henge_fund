@@ -77,6 +77,68 @@ class DeterministicSignalEngine:
         except (TypeError, ValueError):
             return None
 
+    @classmethod
+    def _entry_trigger_context(cls, candles: list[dict[str, Any]], direction: str) -> dict[str, Any]:
+        """Explainable 5-minute entry evidence; informational, not an order trigger.
+
+        Candle-volume ratio is not session-aware RVOL. VWAP is unavailable when
+        candles lack volume, and an opening range cannot be inferred reliably
+        without session timestamps, so neither is fabricated.
+        """
+        result: dict[str, Any] = {
+            "status": "UNAVAILABLE", "trigger": "NONE",
+            "vwap": None, "vwap_position": "UNKNOWN",
+            "ema9": None, "ema_retest": False,
+            "breakout": False, "breakdown": False,
+            "recent_range_high": None, "recent_range_low": None,
+            "opening_range": "UNAVAILABLE",
+            "session_rvol": None,
+            "volume_metric": "last_candle_vs_prior_19_candles_NOT_session_RVOL",
+        }
+        if len(candles) < 20 or direction not in {"LONG", "SHORT"}:
+            return result
+        recent = candles[-20:]
+        try:
+            highs = [float(c["high"]) for c in recent]
+            lows = [float(c["low"]) for c in recent]
+            closes = [float(c["close"]) for c in recent]
+            opens = [float(c["open"]) for c in recent]
+        except (KeyError, ValueError, TypeError):
+            return result
+        if any(h < l or l <= 0 for h, l in zip(highs, lows)):
+            return result
+        last = closes[-1]
+        prior_high = max(highs[-11:-1])
+        prior_low = min(lows[-11:-1])
+        ema = closes[0]
+        alpha = 2.0 / 10.0
+        for close in closes[1:]:
+            ema = alpha * close + (1 - alpha) * ema
+        volumes = [cls._safe_float(c.get("volume")) for c in recent]
+        if all(v is not None and v > 0 for v in volumes):
+            weighted = sum(((h + l + c) / 3) * v for h, l, c, v in zip(highs, lows, closes, volumes))
+            vwap = weighted / sum(volumes)
+            result["vwap"] = round(vwap, 4)
+            result["vwap_position"] = "ABOVE" if last > vwap else "BELOW" if last < vwap else "AT"
+        bullish = last > opens[-1]
+        bearish = last < opens[-1]
+        breakout = last > prior_high and bullish
+        breakdown = last < prior_low and bearish
+        # A retest requires price to touch the EMA zone and close back in the trend direction.
+        retest = (lows[-1] <= ema <= last and bullish) if direction == "LONG" else (highs[-1] >= ema >= last and bearish)
+        result.update({
+            "status": "AVAILABLE",
+            "ema9": round(ema, 4),
+            "ema_retest": retest,
+            "breakout": breakout,
+            "breakdown": breakdown,
+            "recent_range_high": round(prior_high, 4),
+            "recent_range_low": round(prior_low, 4),
+            "trigger": ("BREAKOUT" if breakout else "EMA_RETEST" if retest else "NONE") if direction == "LONG"
+                       else ("BREAKDOWN" if breakdown else "EMA_RETEST" if retest else "NONE"),
+        })
+        return result
+
     def evaluate(self, snapshot: SignalSnapshot) -> DeterministicSignal:
         if not snapshot.is_usable or len(snapshot.candles) < 15:
             return DeterministicSignal(
@@ -214,6 +276,7 @@ class DeterministicSignalEngine:
             "atr_pct": round(atr_pct, 4) if atr_pct is not None else None,
             "range_position_20": round(range_position, 4),
             "volume_ratio": round(volume_ratio, 4) if volume_ratio is not None else None,
+            "entry_trigger": self._entry_trigger_context(candles, direction),
         }
 
         return DeterministicSignal(
