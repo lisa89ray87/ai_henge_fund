@@ -299,6 +299,13 @@ class TradingPipeline:
                         reason, marker = "Combined paper stop risk unavailable", "PAPER_COMBINED_RISK_UNAVAILABLE"
                     elif current_stop_risk + new_stop_risk > combined_limit + 1e-8:
                         reason, marker = "Combined paper stop risk limit exceeded", "PAPER_COMBINED_RISK_REJECT"
+                if reason is None:
+                    from ai_henge_fund.trading.shared_symbol_reservations import reserve_henge_symbol
+                    try:
+                        if not reserve_henge_symbol(snapshot.symbol):
+                            reason, marker = "Symbol reserved by AI Intraday Trader", "SHARED_SYMBOL_CONFLICT"
+                    except Exception as exc:
+                        reason, marker = f"Shared symbol check unavailable: {type(exc).__name__}", "SHARED_SYMBOL_UNAVAILABLE"
                 if reason is not None:
                     blocked = RiskDecision("WAIT", 0, result.risk.risk_per_share, reason,
                                            tuple(checks) + (marker,),
