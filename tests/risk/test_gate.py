@@ -172,3 +172,27 @@ def test_paper_daily_loss_blocks_new_entries(monkeypatch):
         assert "PAPER_DAILY_LOSS_UNAVAILABLE" in unavailable.checks
     finally:
         get_settings.cache_clear()
+
+
+
+def test_constraint_atr_includes_interbar_price_gaps():
+    snapshot = SignalSnapshot(
+        symbol="US.AAPL", timestamp=None, last_price=110, volume=1000,
+        market_state="REGULAR",
+        candles=(
+            {"high": 101, "low": 99, "close": 100},
+            {"high": 111, "low": 109, "close": 110},
+        ),
+        data_source="test", data_quality="LIVE",
+    )
+    # First bar TR=2; second bar TR=max(2, 11, 9)=11.
+    assert RiskGate._constraint_atr(snapshot) == 6.5
+
+
+def test_constraint_atr_returns_none_on_invalid_candles():
+    snapshot = SignalSnapshot(
+        symbol="US.AAPL", timestamp=None, last_price=100, volume=1000,
+        market_state="REGULAR", candles=({"high": 99, "low": 101, "close": 100},),
+        data_source="test", data_quality="LIVE",
+    )
+    assert RiskGate._constraint_atr(snapshot) is None
