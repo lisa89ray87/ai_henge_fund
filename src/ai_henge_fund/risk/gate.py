@@ -145,10 +145,22 @@ class RiskGate:
 
     @staticmethod
     def _constraint_atr(snapshot: SignalSnapshot) -> float | None:
-        candles = [c for c in snapshot.candles[-14:] if c.get("high") is not None and c.get("low") is not None]
+        # True range includes inter-bar gaps, unlike high-low alone.
+        candles = snapshot.candles
+        ranges: list[float] = []
         try:
-            return sum(float(c["high"]) - float(c["low"]) for c in candles) / len(candles) if candles else None
-        except (TypeError, ValueError):
+            for index in range(max(0, len(candles) - 14), len(candles)):
+                candle = candles[index]
+                high, low = float(candle["high"]), float(candle["low"])
+                if high < low or low <= 0:
+                    return None
+                true_range = high - low
+                if index > 0 and candles[index - 1].get("close") is not None:
+                    previous_close = float(candles[index - 1]["close"])
+                    true_range = max(true_range, abs(high - previous_close), abs(low - previous_close))
+                ranges.append(true_range)
+            return sum(ranges) / len(ranges) if ranges else None
+        except (KeyError, TypeError, ValueError, OverflowError):
             return None
 
     def evaluate(
