@@ -412,8 +412,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
         if result.risk.target_price is not None:
             print(f"  target  : ${result.risk.target_price:,.4f}")
 
-        if result.risk.action not in {"BUY", "SELL"}:
-            _send_risk_notification(pipeline, snapshot, result)
+        # Rejections remain in workflow logs and counters; do not spam trade Telegram.
 
         if result.lifecycle is not None:
             paper_trades += 1
