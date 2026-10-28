@@ -418,6 +418,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             paper_trades += 1
             print(f"  paper lifecycle: {result.lifecycle.action}")
             print(f"  paper message  : {result.lifecycle.reason}")
+            print(f"ORDER OUTCOME {snapshot.symbol}: action={result.lifecycle.action} reason={result.lifecycle.reason!r} broker_order_id={result.lifecycle.broker_order_id or 'N/A'}")
             if result.lifecycle.broker_order_id:
                 print(f"  paper order ID : {result.lifecycle.broker_order_id}")
             if paper_trades >= max_paper_trades:
@@ -426,6 +427,7 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
         print(f"AI HEARTBEAT: {candidate_index}/{len(candidates)} completed {snapshot.symbol}")
 
     print(f"Cycle AI analyzed: {analyzed}")
+    print("CYCLE DECISION FUNNEL: " + " ".join(f"{key}={value}" for key, value in decision_stats.items()))
     print(f"Session paper trades: {paper_trades}/{max_paper_trades}")
     return paper_trades, market_data
 
@@ -520,6 +522,7 @@ def main() -> int:
                 pipeline.resume_paper_session()
                 session_resumed = True
 
+            cycle_started = time.monotonic()
             print(f"\nSESSION CYCLE {now:%Y-%m-%d %H:%M:%S %Z}")
             if paper_trades >= max_paper_trades:
                 print("Paper-trade session limit reached; new entries disabled, open-position reversal monitoring remains active.")
@@ -537,8 +540,11 @@ def main() -> int:
                     print("Moomoo signal pipeline: FAIL (overnight handoff refused because broker is not flat)")
                     return 1
                 break
-            sleep_seconds = min(cycle_minutes * 60, max(1, int((_session_close(now) - now).total_seconds())))
-            print(f"Next scan in {sleep_seconds // 60} minute(s).")
+            elapsed_seconds = time.monotonic() - cycle_started
+            remaining_interval = max(0, cycle_minutes * 60 - elapsed_seconds)
+            sleep_seconds = min(remaining_interval, max(0, (_session_close(now) - now).total_seconds()))
+            print(f"CYCLE TIMING: elapsed={elapsed_seconds:.1f}s configured_interval={cycle_minutes * 60}s sleep={sleep_seconds:.1f}s")
+            print(f"Next scan in {sleep_seconds / 60:.1f} minute(s).")
             time.sleep(sleep_seconds)
         print(f"Universe scanned per cycle: {len(universe)}")
         print(f"Session paper trades: {paper_trades}")
