@@ -500,6 +500,7 @@ def main() -> int:
             if not session_loop:
                 pipeline.resume_paper_session()
                 if execute_paper:
+                    capacity.seed_from_broker(pipeline._ensure_lifecycle().execution)
                     capacity.reconcile(pipeline._ensure_lifecycle().monitor)
                     paper_trades = capacity.used
                 paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts, capacity)
@@ -548,7 +549,8 @@ def main() -> int:
                 session_resumed = True
 
             if execute_paper:
-                capacity.reconcile(pipeline._ensure_lifecycle().monitor)
+                capacity.seed_from_broker(pipeline._ensure_lifecycle().execution)
+                    capacity.reconcile(pipeline._ensure_lifecycle().monitor)
                 paper_trades = capacity.used
             cycle_started = time.monotonic()
             print(f"\nSESSION CYCLE {now:%Y-%m-%d %H:%M:%S %Z}")
