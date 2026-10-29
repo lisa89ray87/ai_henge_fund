@@ -430,8 +430,9 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                     risk_distance = fill - stop if result.risk.action == "BUY" else stop - fill
                     reward_distance = target - fill if result.risk.action == "BUY" else fill - target
                     actual_rr = reward_distance / risk_distance if risk_distance > 0 else 0.0
-                    print(f"FILL RISK {snapshot.symbol}: actual_entry={fill:.4f} actual_rr={actual_rr:.3f} minimum_rr={pipeline.risk_gate.reward_risk_multiple:.3f}")
-                    if risk_distance <= 0 or actual_rr < pipeline.risk_gate.reward_risk_multiple:
+                    effective_minimum = pipeline.risk_gate.effective_reward_risk(snapshot, signal_engine.evaluate(snapshot), result.risk.action)
+                    print(f"FILL RISK {snapshot.symbol}: actual_entry={fill:.4f} actual_rr={actual_rr:.3f} minimum_rr={effective_minimum:.3f}")
+                    if risk_distance <= 0 or actual_rr < effective_minimum:
                         print(f"FILL RISK WARNING {snapshot.symbol}: fill changed approved reward/risk")
             if result.lifecycle.broker_order_id:
                 print(f"  paper order ID : {result.lifecycle.broker_order_id}")
