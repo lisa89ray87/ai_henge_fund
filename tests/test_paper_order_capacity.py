@@ -40,6 +40,27 @@ class CapacityTests(unittest.TestCase):
         capacity.reconcile(SimpleNamespace(get=fail))
         self.assertEqual(capacity.used, 1)
 
+    def test_restart_seeds_existing_broker_order(self):
+        capacity = PaperOrderCapacity()
+        execution = SimpleNamespace(list_open_orders=lambda: [{"order_id": "restart-1", "symbol": "US.AAPL"}])
+        capacity.seed_from_broker(execution)
+        capacity.seed_from_broker(execution)
+        self.assertEqual(capacity.used, 1)
+
+    def test_cancelled_part_with_fill_retains_capacity(self):
+        capacity = PaperOrderCapacity()
+        capacity.observe(lifecycle("partial-1"))
+        monitor = SimpleNamespace(get=lambda _: SimpleNamespace(status="CANCELLED_PART", filled_quantity=3))
+        capacity.reconcile(monitor)
+        self.assertEqual(capacity.used, 1)
+
+    def test_cancelled_part_zero_fill_releases_capacity(self):
+        capacity = PaperOrderCapacity()
+        capacity.observe(lifecycle("partial-1"))
+        monitor = SimpleNamespace(get=lambda _: SimpleNamespace(status="CANCELLED_PART", filled_quantity=0))
+        capacity.reconcile(monitor)
+        self.assertEqual(capacity.used, 0)
+
     def test_filled_order_is_not_released(self):
         capacity = PaperOrderCapacity()
         capacity.observe(lifecycle("123", action="OPEN", filled=True))
