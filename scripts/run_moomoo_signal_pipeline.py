@@ -416,9 +416,9 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
 
         if result.lifecycle is not None:
             # Cancelled/unfilled attempts do not consume a filled-trade slot.
-            # Keep uncertain broker states reserved until reconciliation.
+            # Reserve all pending broker orders until zero-fill termination is verified.
             lifecycle = result.lifecycle
-            if lifecycle.trade is not None or (lifecycle.action == "PENDING" and "reconciliation" in lifecycle.reason.lower()):
+            if lifecycle.trade is not None or lifecycle.action == "PENDING":
                 paper_trades += 1
             print(f"  paper lifecycle: {result.lifecycle.action}")
             print(f"  paper message  : {result.lifecycle.reason}")
