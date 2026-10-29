@@ -1,7 +1,8 @@
-from ai_henge_fund.paper_trading.order_capacity import PaperOrderCapacity
 """Run the Moomoo OpenD universe -> deterministic -> TradingAgents -> risk pipeline."""
 
 from __future__ import annotations
+
+from ai_henge_fund.paper_trading.order_capacity import PaperOrderCapacity
 
 import os
 import threading
