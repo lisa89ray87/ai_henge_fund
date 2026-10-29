@@ -132,6 +132,16 @@ def _finalize_fill(self, symbol, side, order_id, filled_quantity, fill_price, st
                            stop_price=existing.stop_price, target_price=existing.target_price,
                            broker_order_id=order_id, status="OPEN")
         return _pending_result(self, symbol, order_id, FILLED_ALL, fill_price, stop_price, target_price)
+    # Shared finalization covers both synchronous fills and watcher-detected late fills.
+    minimum_rr = getattr(self, "_entry_rr_thresholds", {}).get(symbol)
+    if stop_price is not None and target_price is not None:
+        fill = float(fill_price)
+        risk_distance = fill - float(stop_price) if side == "BUY" else float(stop_price) - fill
+        reward_distance = float(target_price) - fill if side == "BUY" else fill - float(target_price)
+        actual_rr = reward_distance / risk_distance if risk_distance > 0 else 0.0
+        print(f"FILL RISK {symbol}: order={order_id} actual_entry={fill:.4f} actual_rr={actual_rr:.3f} minimum_rr={minimum_rr if minimum_rr is not None else 'UNKNOWN'}")
+        if risk_distance <= 0 or (minimum_rr is not None and actual_rr < minimum_rr):
+            print(f"FILL RISK WARNING {symbol}: actual fill violates approved risk/reward")
     qty = float(filled_quantity)
     signed_quantity = qty if side == "BUY" else -qty
     trade = PaperTrade(trade_id=f"moomoo-{order_id}", symbol=symbol, side=side, quantity=qty,
