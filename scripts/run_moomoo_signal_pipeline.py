@@ -382,6 +382,10 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
                 print(f"AI/PIPELINE {snapshot.symbol}: SKIP (no result)")
                 continue
             if execute_paper and paper_trades < max_paper_trades and result.risk.action in {"BUY", "SELL"} and result.risk.quantity > 0:
+                lifecycle_engine = pipeline._ensure_lifecycle()
+                if not hasattr(lifecycle_engine, "_entry_rr_thresholds"):
+                    lifecycle_engine._entry_rr_thresholds = {}
+                lifecycle_engine._entry_rr_thresholds[snapshot.symbol] = pipeline.risk_gate.effective_reward_risk(snapshot, signal_engine.evaluate(snapshot), result.risk.action)
                 result = pipeline.execute_paper_result(snapshot, result)
         except Exception as exc:
             decision_stats["ERROR"] += 1
