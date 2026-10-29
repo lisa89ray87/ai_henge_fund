@@ -73,7 +73,7 @@ def _resolve_pending(self, state):
     if status.status == FILLED_ALL and status.filled_quantity > 0:
         return _finalize_fill(self, state.symbol, state.side, state.broker_order_id, status.filled_quantity,
                               status.average_price or state.entry_price, state.stop_price, state.target_price)
-    if status.status in {"CANCELLED_ALL", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}:
+    if status.status in {"CANCELLED_ALL", "CANCELLED_PART", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}:
         filled = float(status.filled_quantity or 0)
         if filled > 0:
             return _finalize_fill(self, state.symbol, state.side, state.broker_order_id, filled,
@@ -110,7 +110,7 @@ def _watch_pending_entry(self, symbol, order_id, side, quantity, price, stop_pri
                 _finalize_fill(self, symbol, side, order_id, status.filled_quantity,
                                status.average_price or price, stop_price, target_price)
                 return
-            if status.status in {"CANCELLED_ALL", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}:
+            if status.status in {"CANCELLED_ALL", "CANCELLED_PART", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"}:
                 filled = float(status.filled_quantity or 0)
                 if filled > 0:
                     _finalize_fill(self, symbol, side, order_id, filled,
