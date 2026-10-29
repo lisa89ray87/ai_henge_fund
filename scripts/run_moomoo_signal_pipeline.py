@@ -1,3 +1,4 @@
+from ai_henge_fund.paper_trading.order_capacity import PaperOrderCapacity
 """Run the Moomoo OpenD universe -> deterministic -> TradingAgents -> risk pipeline."""
 
 from __future__ import annotations
@@ -242,7 +243,7 @@ def _flatten_before_close(market_data, pipeline) -> int:
     return closed
 
 
-def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts):
+def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts, capacity):
     """Scan the universe in quota-safe batches.
 
     OpenD subscriptions persist on the quote context. Each symbol needs both a
@@ -418,8 +419,8 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
             # Cancelled/unfilled attempts do not consume a filled-trade slot.
             # Reserve all pending broker orders until zero-fill termination is verified.
             lifecycle = result.lifecycle
-            if lifecycle.trade is not None or lifecycle.action == "PENDING":
-                paper_trades += 1
+            capacity.observe(lifecycle)
+            paper_trades = capacity.used
             print(f"  paper lifecycle: {result.lifecycle.action}")
             print(f"  paper message  : {result.lifecycle.reason}")
             print(f"ORDER OUTCOME {snapshot.symbol}: action={result.lifecycle.action} reason={result.lifecycle.reason!r} broker_order_id={result.lifecycle.broker_order_id or 'N/A'}")
@@ -483,6 +484,7 @@ def main() -> int:
     pipeline = TradingPipeline(ai_adapter=TradingAgentsAdapter(GraphRunner()))
     signal_engine = DeterministicSignalEngine()
     paper_trades = 0
+    capacity = PaperOrderCapacity()
     reversal_counts = {}
     session_resumed = False
     premarket_context = None
@@ -492,7 +494,10 @@ def main() -> int:
             now = _session_now()
             if not session_loop:
                 pipeline.resume_paper_session()
-                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts)
+                if execute_paper:
+                    capacity.reconcile(pipeline._ensure_lifecycle().monitor)
+                    paper_trades = capacity.used
+                paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts, capacity)
                 pipeline.handoff_paper_session()
                 break
             if now.weekday() >= 5:
@@ -537,11 +542,14 @@ def main() -> int:
                 pipeline.resume_paper_session()
                 session_resumed = True
 
+            if execute_paper:
+                capacity.reconcile(pipeline._ensure_lifecycle().monitor)
+                paper_trades = capacity.used
             cycle_started = time.monotonic()
             print(f"\nSESSION CYCLE {now:%Y-%m-%d %H:%M:%S %Z}")
             if paper_trades >= max_paper_trades:
                 print("Paper-trade session limit reached; new entries disabled, open-position reversal monitoring remains active.")
-            paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts)
+            paper_trades, market_data = _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, interval, execute_paper, max_ai_candidates, premarket_context, paper_trades, max_paper_trades, scan_delay_seconds, ai_timeout_seconds, subscription_batch_size, reversal_counts, capacity)
             now = _session_now()
             force_flat_minutes = get_settings().ai_henge_fund_force_flat_minutes_before_close
             if now >= (_session_close(now) - __import__("datetime").timedelta(minutes=force_flat_minutes)):
