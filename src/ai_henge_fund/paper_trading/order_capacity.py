@@ -3,7 +3,7 @@
 An order ID reserves one slot until a confirmed zero-fill terminal state.
 Filled orders continue to count for the remainder of the session.
 """
-TERMINAL_ZERO_FILL = frozenset({"CANCELLED_ALL", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"})
+TERMINAL_ZERO_FILL = frozenset({"CANCELLED_ALL", "CANCELLED_PART", "FAILED", "DELETED", "DISABLED", "FILL_CANCELLED"})
 
 
 class PaperOrderCapacity:
@@ -42,3 +42,14 @@ class PaperOrderCapacity:
             elif status.status in TERMINAL_ZERO_FILL:
                 del self._orders[order_id]
                 print(f"ORDER CAPACITY {order_id}: confirmed zero-fill terminal; slot released")
+
+    def seed_from_broker(self, execution):
+        """Reserve every currently working broker order, including across restarts.
+
+        If discovery fails, raise rather than allowing a new submission with an
+        incorrectly empty reservation ledger.
+        """
+        for row in execution.list_open_orders():
+            order_id = row.get("order_id")
+            if order_id is not None:
+                self._orders.setdefault(str(order_id), "PENDING")
