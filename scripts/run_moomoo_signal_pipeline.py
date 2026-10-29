@@ -415,10 +415,24 @@ def _run_cycle(market_data, pipeline, signal_engine, universe, candle_count, int
         # Rejections remain in workflow logs and counters; do not spam trade Telegram.
 
         if result.lifecycle is not None:
-            paper_trades += 1
+            # Cancelled/unfilled attempts do not consume a filled-trade slot.
+            # Keep uncertain broker states reserved until reconciliation.
+            lifecycle = result.lifecycle
+            if lifecycle.trade is not None or (lifecycle.action == "PENDING" and "reconciliation" in lifecycle.reason.lower()):
+                paper_trades += 1
             print(f"  paper lifecycle: {result.lifecycle.action}")
             print(f"  paper message  : {result.lifecycle.reason}")
             print(f"ORDER OUTCOME {snapshot.symbol}: action={result.lifecycle.action} reason={result.lifecycle.reason!r} broker_order_id={result.lifecycle.broker_order_id or 'N/A'}")
+            if result.lifecycle.trade is not None and result.lifecycle.entry_price is not None:
+                fill = result.lifecycle.entry_price
+                stop, target = result.risk.stop_price, result.risk.target_price
+                if stop is not None and target is not None:
+                    risk_distance = fill - stop if result.risk.action == "BUY" else stop - fill
+                    reward_distance = target - fill if result.risk.action == "BUY" else fill - target
+                    actual_rr = reward_distance / risk_distance if risk_distance > 0 else 0.0
+                    print(f"FILL RISK {snapshot.symbol}: actual_entry={fill:.4f} actual_rr={actual_rr:.3f} minimum_rr={pipeline.risk_gate.reward_risk_multiple:.3f}")
+                    if risk_distance <= 0 or actual_rr < pipeline.risk_gate.reward_risk_multiple:
+                        print(f"FILL RISK WARNING {snapshot.symbol}: fill changed approved reward/risk")
             if result.lifecycle.broker_order_id:
                 print(f"  paper order ID : {result.lifecycle.broker_order_id}")
             if paper_trades >= max_paper_trades:
