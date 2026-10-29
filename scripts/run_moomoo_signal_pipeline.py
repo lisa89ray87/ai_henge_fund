@@ -550,7 +550,7 @@ def main() -> int:
 
             if execute_paper:
                 capacity.seed_from_broker(pipeline._ensure_lifecycle().execution)
-                    capacity.reconcile(pipeline._ensure_lifecycle().monitor)
+                capacity.reconcile(pipeline._ensure_lifecycle().monitor)
                 paper_trades = capacity.used
             cycle_started = time.monotonic()
             print(f"\nSESSION CYCLE {now:%Y-%m-%d %H:%M:%S %Z}")
